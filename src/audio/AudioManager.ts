@@ -93,6 +93,16 @@ export class AudioManager {
     notes.forEach((f, i) => setTimeout(() => this.tone(f, 0.28, 'triangle', 0.25), i * 120));
   }
 
+  /** Topie blast: a deep boom with a sharp crack on top and a rolling rumble. */
+  topieBlast() {
+    this.noiseBurst(0.06, 0.9, 5200);            // crack
+    this.tone(110, 0.7, 'sawtooth', 0.42, 28);   // boom
+    this.tone(60, 0.9, 'sine', 0.5, 24);         // sub
+    this.noiseBurst(0.55, 0.6, 650);             // blast body
+    setTimeout(() => this.noiseBurst(0.8, 0.25, 280), 140); // rumble tail
+    setTimeout(() => { this.tone(880, 0.12, 'triangle', 0.2, 1320); this.tone(1320, 0.2, 'triangle', 0.16, 1760); }, 260);
+  }
+
   gameOverBust() {
     this.noiseBurst(0.35, 0.5, 700);
     this.tone(120, 0.5, 'sawtooth', 0.25, 40);

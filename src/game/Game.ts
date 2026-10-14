@@ -5,6 +5,7 @@ import { Obstacle } from '../entities/Obstacle';
 import { FingerLauncher } from '../entities/FingerLauncher';
 import { PhysicsWorld, CollisionEvent } from '../physics/PhysicsWorld';
 import { DustSystem } from '../effects/Dust';
+import { ShockwaveSystem } from '../effects/Shockwave';
 import { AudioManager } from '../audio/AudioManager';
 import { UI, Player } from '../ui/UI';
 import {
@@ -75,6 +76,9 @@ export class Game {
   private scene: SceneManager;
   private phys = new PhysicsWorld();
   private dust = new DustSystem();
+  private shock = new ShockwaveSystem();
+  /** how slow the slow-motion is (0.35 normal hit, lower for a Topie blast) */
+  private slowFactor = 0.35;
   private audio = new AudioManager();
   private finger = new FingerLauncher();
   private seeds: [Seed, Seed] | null = null;
@@ -119,6 +123,7 @@ export class Game {
     this.ui = ui;
     this.scene = new SceneManager(canvas);
     this.scene.add(this.dust.points);
+    this.scene.add(this.shock.group);
     this.scene.add(this.finger.group);
 
     this.phys.onCollision = (e) => this.handleCollision(e);
@@ -609,10 +614,28 @@ export class Game {
       const other = attacker === e.a ? e.b! : e.a;
       // Only count as hit if attacker was actually moving significantly
       const attackerSpeed = Math.hypot(attacker.vel.x, attacker.vel.z) + Math.hypot(other.vel.x, other.vel.z);
-      // A stood-up seed gets knocked flat by any real contact.
+      // A stood-up seed gets knocked flat by any real contact — and if it was
+      // stood up with Topie, it's a TOPIE BLAST.
+      const topieHit = attackerSpeed > 0.4 && other.standing;
       if (attackerSpeed > 0.4) {
         e.a.setStanding(false);
         e.b?.setStanding(false);
+      }
+      if (topieHit) {
+        if (authority) {
+          // The stood-up seed takes the full hit: it flies further.
+          const boost = 1.55;
+          other.vel.x *= boost;
+          other.vel.z *= boost;
+          const sp = Math.hypot(other.vel.x, other.vel.z);
+          if (sp > MAX_LAUNCH_SPEED) { other.vel.x *= MAX_LAUNCH_SPEED / sp; other.vel.z *= MAX_LAUNCH_SPEED / sp; }
+          this.hitDuringShot = true;
+          this.shotHits++;
+          this.scores[this.currentPlayer - 1]++;
+          this.ui.setScore(this.scores[0], this.scores[1]);
+        }
+        this.topieBlast(other, e.point, attackerSpeed);
+        return;
       }
       if (attackerSpeed > 0.4) {
         if (authority) {
@@ -652,6 +675,20 @@ export class Game {
       this.dust.burst(e.point.x, e.point.z, Math.floor(4 + power * 8), 0.3 + power * 0.5);
       this.scene.shake(0.04 + power * 0.1);
     }
+  }
+
+  /** The big one: what you see when a Topie'd seed gets hit. */
+  private topieBlast(target: Seed, point: THREE.Vector3, impact: number) {
+    const power = Math.min(1.4, 0.8 + impact / 14);
+    target.pop(power);
+    this.dust.explosion(point.x, point.z, power);
+    window.setTimeout(() => this.dust.burst(point.x, point.z, 40, 2.2), 120);
+    this.shock.blast(point.x, point.z, power);
+    this.scene.shake(0.95);
+    this.audio.topieBlast();
+    this.ui.flashBlast('TOPIE BLAST! +1', 'topie');
+    this.slowFactor = 0.18;
+    this.slowMoUntil = performance.now() + 650;
   }
 
   private triggerBlastedIntoObstacle(loser: Player) {
@@ -706,7 +743,8 @@ export class Game {
     const loop = () => {
       const rawDt = Math.min(0.05, this.clock.getDelta());
       const slow = performance.now() < this.slowMoUntil;
-      const dt = slow ? rawDt * 0.35 : rawDt;
+      if (!slow) this.slowFactor = 0.35;
+      const dt = slow ? rawDt * this.slowFactor : rawDt;
 
       if (this.tween && this.seeds) {
         const tw = this.tween;
@@ -774,6 +812,7 @@ export class Game {
 
       if (this.seeds) for (const s of this.seeds) s.updateStand(rawDt);
       this.finger.update(dt);
+      this.shock.update(rawDt);
       this.dust.update(dt);
       this.scene.update(dt);
       this.scene.render();

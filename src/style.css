@@ -1043,3 +1043,41 @@ input, textarea {
 }
 
 .btn-topie.hidden { display: none; }
+
+/* ---------- Topie blast ---------- */
+#blast-flash.topie {
+  font-size: clamp(28px, 7.5vw, 72px);
+  color: #fff3c4;
+  -webkit-text-stroke: 2px #c2410c;
+  text-shadow: 0 0 18px rgba(255, 140, 30, 0.95), 0 0 48px rgba(255, 70, 0, 0.8), 0 6px 0 rgba(90, 20, 0, 0.6);
+  white-space: nowrap;
+}
+
+#blast-flash.topie.show {
+  animation: topie-pop 1.25s cubic-bezier(0.2, 1.4, 0.3, 1) both;
+}
+
+@keyframes topie-pop {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.2) rotate(-8deg); }
+  14%  { opacity: 1; transform: translate(-50%, -50%) scale(1.18) rotate(4deg); }
+  22%  { transform: translate(-51.5%, -48.5%) scale(1.04) rotate(-3deg); }
+  30%  { transform: translate(-48.5%, -51.5%) scale(1.08) rotate(2deg); }
+  38%  { transform: translate(-50%, -50%) scale(1.05) rotate(0deg); }
+  80%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -60%) scale(1.08); }
+}
+
+#screen-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(circle at 50% 45%, rgba(255, 236, 180, 0.9), rgba(255, 120, 30, 0.45) 40%, rgba(120, 20, 0, 0) 75%);
+}
+
+#screen-flash.on { animation: screen-flash 0.55s ease-out both; }
+
+@keyframes screen-flash {
+  0% { opacity: 0.95; }
+  100% { opacity: 0; }
+}

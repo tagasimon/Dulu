@@ -270,10 +270,17 @@ export class UI {
     this.hintEl.textContent = text;
   }
 
-  flashBlast(text = 'BLAST! +1') {
+  flashBlast(text = 'BLAST! +1', variant: 'normal' | 'topie' = 'normal') {
     this.blastEl.textContent = text;
+    this.blastEl.classList.remove('show', 'topie');
+    void this.blastEl.offsetWidth; // restart the animation
+    this.blastEl.classList.toggle('topie', variant === 'topie');
     this.blastEl.classList.add('show');
-    window.setTimeout(() => this.blastEl.classList.remove('show'), 700);
+    if (variant === 'topie') {
+      const f = document.getElementById('screen-flash');
+      if (f) { f.classList.remove('on'); void f.offsetWidth; f.classList.add('on'); }
+    }
+    window.setTimeout(() => this.blastEl.classList.remove('show'), variant === 'topie' ? 1300 : 700);
   }
 
   showNetBanner(text: string) {

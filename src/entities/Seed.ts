@@ -21,6 +21,11 @@ export class Seed {
   private static UPRIGHT = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
   private tmpQ = new THREE.Quaternion();
   private ring!: THREE.Mesh;
+  /** Visual-only flight after a Topie blast (physics stays on the ground plane). */
+  private airY = 0;
+  private airVy = 0;
+  private spinAxis = new THREE.Vector3(1, 0, 0);
+  private spinRate = 0;
 
   constructor(playerId: 1 | 2) {
     this.playerId = playerId;
@@ -122,8 +127,30 @@ export class Seed {
 
   get standing() { return this.standTarget > 0; }
 
-  /** Animate standing up / toppling. Call every frame. */
+  /** Topie blast: knock the seed up into the air, tumbling. */
+  pop(power = 1) {
+    this.airVy = 4.2 * power;
+    this.spinAxis.set(Math.random() - 0.5, Math.random() * 0.4, Math.random() - 0.5).normalize();
+    this.spinRate = 28 * power;
+  }
+
+  /** Animate standing up / toppling and any blast flight. Call every frame. */
   updateStand(dt: number) {
+    if (this.airVy !== 0 || this.airY > 0) {
+      this.airVy -= 16 * dt;
+      this.airY += this.airVy * dt;
+      if (this.airY <= 0) {
+        this.airY = 0;
+        this.airVy = this.airVy < -1.2 ? -this.airVy * 0.32 : 0; // a small bounce
+      }
+      if (this.spinRate > 0.1) {
+        this.tmpQ.setFromAxisAngle(this.spinAxis, this.spinRate * dt);
+        this.rollQuat.premultiply(this.tmpQ);
+        this.spinRate *= Math.max(0, 1 - dt * (this.airY > 0 ? 0.6 : 5));
+      }
+      this.applyPose();
+      return;
+    }
     if (Math.abs(this.standT - this.standTarget) < 0.001) return;
     // Standing up is a quick flick; falling over is a little slower.
     const rate = this.standTarget > this.standT ? 9 : 6;
@@ -138,7 +165,7 @@ export class Seed {
     this.body.quaternion.copy(this.rollQuat).slerp(Seed.UPRIGHT, e);
     // Lift so it rests on its edge instead of sinking into the dirt, with a
     // tiny wobble at the top of the stand-up.
-    this.body.position.y = e * SEED_RADIUS * 0.42 + Math.sin(e * Math.PI) * 0.03;
+    this.body.position.y = e * SEED_RADIUS * 0.42 + Math.sin(e * Math.PI) * 0.03 + this.airY;
     // Brighter, bigger ground ring while standing so it's easy to spot.
     if (this.ring) {
       this.ring.scale.setScalar(1 + e * 0.45);

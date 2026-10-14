@@ -61,6 +61,7 @@ const coffeeStatusText = document.getElementById('coffee-status-text')!;
 const coffeeStatusCta = document.getElementById('coffee-status-cta')!;
 const coffeeStatusUg = document.getElementById('coffee-status-ug')!;
 const goSupportBtn = document.getElementById('go-support-btn')!;
+const hudRolexBtn = document.getElementById('hud-rolex')!;
 
 function renderSupport() {
   const st = coffee.menuStatus();
@@ -70,6 +71,7 @@ function renderSupport() {
   coffeeStatusCta.className = st.kind === 'bmc' ? 'bmc-btn' : 'link-btn';
   goSupportBtn.className = st.kind === 'bmc' ? 'bmc-btn small' : 'link-btn';
   goSupportBtn.textContent = st.kind === 'bmc' ? 'Buy me a Rolex' : 'Buy me a Rolex 🌯';
+  hudRolexBtn.classList.toggle('bmc', st.kind === 'bmc');
   // Outside Uganda, offer a way into Mobile Money (only when payments are on).
   coffeeStatusUg.classList.toggle('hidden', !(st.kind === 'bmc' && coffee.config.enabled));
 }
@@ -82,6 +84,9 @@ function support() {
 }
 coffeeStatusCta.addEventListener('click', support);
 goSupportBtn.addEventListener('click', support);
+// In-game: never pauses anything; Uganda opens the tip sheet over the game,
+// elsewhere it opens Buy Me a Coffee in a new tab.
+hudRolexBtn.addEventListener('click', (e) => { e.stopPropagation(); support(); });
 coffeeStatusUg.addEventListener('click', () => {
   regionStore.setUganda();
   net.send({ type: 'setRegion', region: 'UG' });

@@ -29,6 +29,7 @@ import {
 } from '../shared/arena.js';
 import { openDb } from './db.js';
 import { createPayments } from './payments.js';
+import { createStripe } from './stripe.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -85,6 +86,15 @@ const payments = createPayments({
   },
 });
 
+// Players outside Uganda pay by card through Stripe Checkout.
+const stripe = createStripe({
+  db,
+  log,
+  onPassGranted: (guestId, expiresAt) => {
+    send(sessions.get(guestId), { type: 'pass', pass: { active: true, expiresAt } });
+  },
+});
+
 // Confirm payments ourselves; the Relworx webhook slot belongs to Jukila.
 const stopReconciler = payments.startReconciler();
 
@@ -95,10 +105,17 @@ const stopReconciler = payments.startReconciler();
  * isn't tamper-proof; it's a soft gate, not DRM.
  */
 function requireCoffee(session) {
-  if (session.region !== 'UG') return true;
-  if (payments.hasPass(session.guestId)) return true;
+  // The gate is on only where a way to pay is configured for that region.
+  const gateOn = session.region === 'UG' ? payments.enabled : stripe.enabled;
+  if (!gateOn) return true;
+  if (payments.passFor(session.guestId).active) return true;
   send(session, { type: 'error', code: 'NEED_COFFEE', message: 'Online play needs a Rolex.' });
   return false;
+}
+
+/** What the client needs to show the Rolex sheet (both payment methods). */
+function coffeeConfig(guestId) {
+  return { ...payments.config(guestId), pass: payments.passFor(guestId), card: stripe.config() };
 }
 
 function cleanRegion(r) {
@@ -532,7 +549,7 @@ function attach(ws, hello) {
     playing: playingCount(),
     waiting: queue.filter((s) => s.ws).length,
     inGame: !!(room && isActive(room)),
-    coffee: payments.config(session.guestId),
+    coffee: coffeeConfig(session.guestId),
   });
 
   if (room) {
@@ -657,10 +674,20 @@ function serveStatic(req, res) {
 const server = http.createServer((req, res) => {
   if (req.url === '/healthz') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify({ ok: true, online: onlineCount(), playing: playingCount(), queue: queue.length, payments: payments.enabled }));
+    return res.end(JSON.stringify({ ok: true, online: onlineCount(), playing: playingCount(), queue: queue.length, payments: payments.enabled, cards: stripe.enabled }));
+  }
+  if (req.url && req.url.startsWith('/api/coffee') && req.method === 'GET') {
+    const u = new URL(req.url, 'http://x');
+    const body = JSON.stringify(coffeeConfig(u.searchParams.get('guestId') || ''));
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    return res.end(body);
   }
   if (req.url && (req.url.startsWith('/relworx/') || req.url.startsWith('/api/coffee'))) {
     payments.route(req, res, clientIp(req));
+    return;
+  }
+  if (req.url && req.url.startsWith('/stripe/')) {
+    stripe.route(req, res, clientIp(req));
     return;
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
@@ -763,6 +790,7 @@ process.on('unhandledRejection', (err) => { log('unhandledRejection', err); });
 server.listen(PORT, () => {
   log(`DULU server on :${PORT} — static from ${STATIC_DIR}`);
   log(`payments: ${payments.enabled ? `ON — ${payments.priceUgx} UGX per Rolex = ${payments.passHours}h online (players in Uganda)` : 'OFF (Relworx env vars not set) — online play is free'}; data in ${DATA_DIR}`);
+  log(`card payments (outside Uganda): ${stripe.enabled ? `ON — Stripe, ${(stripe.config().priceCents / 100).toFixed(2)} ${stripe.config().currency.toUpperCase()} per Rolex` : 'OFF (STRIPE_SECRET_KEY not set) — online play free outside Uganda'}`);
   log(`limits: ${MAX_CONNECTIONS} connections, ${MAX_CONNECTIONS_PER_IP}/IP; origins: ${ALLOWED_ORIGINS.join(", ") || "any"}`);
 });
 

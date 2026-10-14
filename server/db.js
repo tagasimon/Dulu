@@ -35,7 +35,32 @@ CREATE TABLE IF NOT EXISTS passes (
   updated_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS passes_msisdn_idx ON passes (msisdn);
+
+-- Card payments via Stripe Checkout (players outside Uganda).
+CREATE TABLE IF NOT EXISTS stripe_payments (
+  id             TEXT PRIMARY KEY,
+  session_id     TEXT NOT NULL UNIQUE,            -- Stripe Checkout Session id (cs_...)
+  guest_id       TEXT NOT NULL,
+  rolexes        INTEGER NOT NULL,
+  amount_cents   INTEGER NOT NULL,
+  currency       TEXT NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'PENDING'
+                 CHECK (status IN ('PENDING', 'SUCCESS', 'FAILED')),
+  email          TEXT,
+  raw_response   TEXT,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  confirmed_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS stripe_payments_status_idx ON stripe_payments (status);
 `;
+
+/** Add columns that older databases don't have yet. */
+function migrate(db) {
+  const cols = db.prepare(`PRAGMA table_info(passes)`).all().map((c) => c.name);
+  if (!cols.includes('email')) db.exec(`ALTER TABLE passes ADD COLUMN email TEXT`);
+  db.exec(`CREATE INDEX IF NOT EXISTS passes_email_idx ON passes (email)`);
+}
 
 /** Open (and migrate) the database. Pass ':memory:' for tests. */
 export function openDb(file) {
@@ -43,5 +68,6 @@ export function openDb(file) {
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  migrate(db);
   return db;
 }

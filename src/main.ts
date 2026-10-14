@@ -3,7 +3,7 @@ import { Game, type MatchInfo, type ServerGameOver } from './game/Game';
 import { UI, type Player } from './ui/UI';
 import { Net } from './net/Net';
 import { identity } from './net/identity';
-import { CoffeeSheet, openBmc, type CoffeeConfig } from './ui/Coffee';
+import { CoffeeSheet, type CoffeeConfig } from './ui/Coffee';
 import { regionStore } from './net/region';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -54,8 +54,8 @@ function withCoffee(action: () => void) {
   else coffee.open(action);
 }
 
-// "Buy me a Rolex" — a quiet line on the menu and on the game-over card.
-// Uganda: Mobile Money sheet. Elsewhere: Buy Me a Coffee page (card).
+// "Buy me a Rolex" — a quiet line on the menu, the game-over card and in game.
+// Uganda: Mobile Money. Elsewhere: card via Stripe Checkout.
 const coffeeStatusEl = document.getElementById('coffee-status')!;
 const coffeeStatusText = document.getElementById('coffee-status-text')!;
 const coffeeStatusCta = document.getElementById('coffee-status-cta')!;
@@ -65,21 +65,23 @@ const hudRolexBtn = document.getElementById('hud-rolex')!;
 
 function renderSupport() {
   const st = coffee.menuStatus();
-  coffeeStatusEl.classList.remove('hidden');
-  coffeeStatusText.textContent = st.text;
-  coffeeStatusCta.textContent = st.cta;
-  coffeeStatusCta.className = st.kind === 'bmc' ? 'bmc-btn' : 'link-btn';
-  goSupportBtn.className = st.kind === 'bmc' ? 'bmc-btn small' : 'link-btn';
-  goSupportBtn.textContent = st.kind === 'bmc' ? 'Buy me a Rolex' : 'Buy me a Rolex 🌯';
-  hudRolexBtn.classList.toggle('bmc', st.kind === 'bmc');
-  // Outside Uganda, offer a way into Mobile Money (only when payments are on).
-  coffeeStatusUg.classList.toggle('hidden', !(st.kind === 'bmc' && coffee.config.enabled));
+  const can = !!st;
+  coffeeStatusEl.classList.toggle('hidden', !can);
+  document.querySelector('.go-support')?.classList.toggle('hidden', !can);
+  hudRolexBtn.classList.toggle('hidden', !can);
+  if (st) {
+    coffeeStatusText.textContent = st.text;
+    coffeeStatusCta.textContent = st.cta;
+  }
+  // Outside Uganda, offer a way into Mobile Money (only when it's set up).
+  coffeeStatusUg.classList.toggle('hidden', !(regionStore.value !== 'UG' && coffee.config.enabled));
 }
 coffee.onChange = renderSupport;
 renderSupport();
 
 function support() {
-  if (coffee.mobileMoney) armBack();
+  if (!coffee.canSupport) return;
+  if (phase.kind === 'menu') armBack();
   coffee.support();
 }
 coffeeStatusCta.addEventListener('click', support);
@@ -464,6 +466,19 @@ window.addEventListener('popstate', () => {
 // ---------- boot ----------
 
 if (new URLSearchParams(location.search).has('debug')) (window as any).__dulu = game;
+
+// Back from Stripe Checkout (this tab was opened for paying): confirm + thank.
+{
+  const params = new URLSearchParams(location.search);
+  const sid = params.get('session_id');
+  if (params.get('rolex') === 'paid' && sid && /^cs_[A-Za-z0-9_]+$/.test(sid)) {
+    coffee.wasCardReturn = true;
+    coffee.handleCardReturn(sid);
+  }
+  if (params.has('rolex')) {
+    try { history.replaceState(null, '', '/'); } catch { /* ignore */ }
+  }
+}
 
 // Menu status line before the socket connects.
 fetch(`/api/coffee?guestId=${encodeURIComponent(identity.guestId)}`)

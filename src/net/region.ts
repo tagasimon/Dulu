@@ -1,6 +1,6 @@
 // Where is this player? Decides how they support the game:
 //   UG   → Mobile Money (Relworx) "Buy me a Rolex"; online play needs one
-//   INTL → Buy Me a Coffee by card (tip only; online play is free)
+//   INTL → card via Stripe Checkout ($1.99); online play needs one once Stripe is set up
 // Detected from the browser's timezone. A player can switch themselves into
 // UG mode from the sheet ("In Uganda? Pay with Mobile Money"); there's no
 // switch the other way on the paywall, so it can't be used to skip paying.
@@ -33,5 +33,3 @@ export const regionStore = {
     try { localStorage.setItem(KEY, 'UG'); } catch { /* ignore */ }
   },
 };
-
-export const BMC_URL = 'https://www.buymeacoffee.com/elastictechnologies';

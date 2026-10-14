@@ -102,21 +102,29 @@ docker run --rm -p 8080:80 dulu
 # open http://localhost:8080 in two browsers
 ```
 
-## Buy me a Rolex 🌯 (Relworx mobile money + Buy Me a Coffee)
+## Buy me a Rolex 🌯 (Mobile Money in Uganda, Stripe elsewhere)
 
-A *Rolex* is Uganda's chapati-and-egg street food (about 2,000 UGX), so "buy me a Rolex" is the local "buy me a coffee".
+A *Rolex* is Uganda's chapati-and-egg street food, so "buy me a Rolex" is the local "buy me a coffee". **1 Rolex = 24 hours of online play**, and more Rolexes stack extra days. Same Device is always free, and a friend who opens your room link plays free.
 
-**Players in Uganda** (browser timezone `Africa/Kampala`):
-- Same Device is always free.
-- Play Online and *creating* a friend room need a Rolex: **1 Rolex = 2,000 UGX = 24 hours**, and more Rolexes stack extra days. They pay with MTN/Airtel Mobile Money via Relworx.
-- A friend who opens your room link plays free.
-- Free players see a quiet "Buy me a Rolex 🌯" on the menu and the game-over card. It never interrupts a game.
+| Where the player is | How they pay | Price |
+|---|---|---|
+| Uganda (browser timezone `Africa/Kampala`) | MTN / Airtel **Mobile Money** via Relworx | **2,000 UGX** |
+| Everywhere else | **Card, Apple Pay, Google Pay** via Stripe Checkout | **$1.99** |
 
-**Players outside Uganda** play online free and see a yellow **Buy me a Rolex** button that opens [Buy Me a Coffee](https://www.buymeacoffee.com/elastictechnologies) (card payments, a tip only). If they are actually in Uganda, an "In Uganda? Use Mobile Money" link switches them over. There's deliberately no switch the other way on the paywall, so it can't be used to skip paying.
+- Players in Uganda can also tap "Pay by card instead", and players elsewhere can tap "In Uganda? Pay with Mobile Money".
+- Each region's online play is only gated once its payment method is configured. With no Stripe key, online play stays free outside Uganda.
+- Free players see a quiet "Buy me a Rolex 🌯" on the menu, on the game-over card and in-game. It never interrupts a game.
 
-The region comes from the browser's timezone, so it's a soft gate: someone determined could change their phone's timezone to play online free.
+**Card flow:** tapping Buy opens Stripe's own checkout page in a new tab, so the game stays open; card details never touch DULU. After paying, Stripe sends the player back to `https://dulu.elastictech.biz/?rolex=paid&session_id=…`, which confirms the payment and says "you can close this tab". The original game tab unlocks by itself (live over the WebSocket, plus polling), and the Stripe webhook confirms it too. Whichever arrives first grants the time, exactly once. On a new device, players restore with the email they used at checkout.
 
-Players and the server see who's around: the menu shows a live pill ("3 other players online · 1 in games", or "1 player waiting for a match — tap Play Online" when someone's in the queue), updated within ~1.5 s.
+### Stripe setup (one time)
+1. **Coolify → Environment Variables:** add `STRIPE_SECRET_KEY` (`sk_live_…`, or `sk_test_…` to try it first) and `PUBLIC_URL=https://dulu.elastictech.biz`, then redeploy. The log shows `card payments (outside Uganda): ON — Stripe, 1.99 USD per Rolex`.
+2. **Stripe Dashboard → Developers → Webhooks → Add endpoint:** `https://dulu.elastictech.biz/stripe/webhook`, events `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`. Copy its signing secret into `STRIPE_WEBHOOK_SECRET` and redeploy. If other apps share the Stripe account, that's fine: DULU only acts on sessions it created (`metadata.app = dulu`).
+3. **Test:** with `sk_test_…`, buy a Rolex from a browser that isn't on Uganda time, using card `4242 4242 4242 4242`, any future date and any CVC. Then swap in the live key.
+
+Optional: `ROLEX_PRICE_USD_CENTS` (default `199`), `ROLEX_CURRENCY` (default `usd`).
+
+### Mobile Money (Relworx) details
 
 How a purchase works:
 1. The player picks how many Rolexes and enters their MTN/Airtel number (never a PIN).
@@ -151,13 +159,14 @@ Passes are tied to the player's anonymous browser ID. On a new phone or browser,
 - `GET /api/coffee?guestId=…` and `POST /api/coffee/restore`: pass status and restore.
 
 ### Tests
-`npm test` runs 26 tests against a mocked Relworx. They cover phone normalisation, collect validation, the row being saved before the Relworx call, error passthrough, webhook signatures, unknown references, retries, exactly-once finalisation under webhook + poll races, stacking and expiry, restore, and the background checker. To look at what's been paid on the server: `sqlite3 /data/dulu.db "select reference, msisdn, amount_ugx, status, created_at from payments order by created_at desc limit 20"` (or copy the file off the volume).
+`npm test` runs 36 tests (26 Mobile Money, 10 Stripe) against a mocked Relworx. They cover phone normalisation, collect validation, the row being saved before the Relworx call, error passthrough, webhook signatures, unknown references, retries, exactly-once finalisation under webhook + poll races, stacking and expiry, restore, and the background checker. To look at what's been paid on the server: `sqlite3 /data/dulu.db "select reference, msisdn, amount_ugx, status, created_at from payments order by created_at desc limit 20"` (or copy the file off the volume).
 
 ## Structure
 
 ```
 server/index.js           multiplayer server: matchmaking, rooms, turns, reconnects, static files
 server/payments.js        Relworx collections (collect / status / webhook), Rolex passes
+server/stripe.js          Stripe Checkout for players outside Uganda (checkout / status / webhook / restore)
 server/db.js              SQLite schema (payments, passes); built into Node 22, no extra dependency
 test/payments.test.js     payment tests (npm test)
 shared/arena.js           seeded arena generator shared by server + game (+ arena.d.ts types)
@@ -174,7 +183,7 @@ src/
   effects/Dust.ts         warm dust burst + rolling trail particles
   audio/AudioManager.ts   WebAudio-synthesized launch/thwack/roll SFX
   ui/UI.ts                HUD/menu/lobby/tutorial/game-over DOM controllers
-  ui/Coffee.ts            buy-me-a-Rolex sheet (stepper, phone, polling, restore) + Buy Me a Coffee link
+  ui/Coffee.ts            buy-me-a-Rolex sheet (stepper, phone, polling, restore) + Stripe card checkout
   net/region.ts           Uganda vs. elsewhere (timezone), decides Mobile Money vs. card
   net/Net.ts              WebSocket client with auto-reconnect
   net/identity.ts         anonymous guest ID + nickname (localStorage)

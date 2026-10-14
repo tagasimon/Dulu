@@ -99,6 +99,7 @@ export class PhysicsWorld {
     // Collide with obstacles (treat as static circles in XZ)
     for (const s of this.seeds) {
       for (const o of this.obstacles) {
+        if (o.kind === 'hole') { this.applyHole(s, o, dt); continue; }
         const dx = s.pos.x - o.pos.x;
         const dz = s.pos.z - o.pos.z;
         const rSum = s.radius + o.radius;
@@ -140,7 +141,8 @@ export class PhysicsWorld {
       const b = this.seeds[1];
       const dx = b.pos.x - a.pos.x;
       const dz = b.pos.z - a.pos.z;
-      const rSum = a.radius + b.radius;
+      // A seed stood up with "Topie" is a bigger target (hitBonus > 0).
+      const rSum = a.radius + b.radius + a.hitBonus + b.hitBonus;
       const d2 = dx * dx + dz * dz;
       if (d2 < rSum * rSum && d2 > 1e-6) {
         const d = Math.sqrt(d2);
@@ -177,6 +179,28 @@ export class PhysicsWorld {
         }
       }
     }
+  }
+
+  /**
+   * Holes aren't solid. A seed inside one sinks a little, loses speed fast and
+   * is pulled toward the middle: slow seeds get trapped, fast ones roll out.
+   */
+  private applyHole(s: Seed, o: Obstacle, dt: number) {
+    const dx = s.pos.x - o.pos.x;
+    const dz = s.pos.z - o.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d >= o.radius) return;
+    const depth = 1 - d / o.radius;            // 0 at the rim, 1 in the middle
+    const drag = Math.max(0, 1 - (1.6 + depth * 2.4) * dt);
+    s.vel.x *= drag;
+    s.vel.z *= drag;
+    if (d > 1e-4) {
+      // slope toward the centre (fades out right in the middle so it settles)
+      const pull = 4.2 * depth * Math.min(1, d / (o.radius * 0.35)) * dt;
+      s.vel.x -= (dx / d) * pull;
+      s.vel.z -= (dz / d) * pull;
+    }
+    s.pos.y = s.radius - depth * 0.09;         // sink a little
   }
 
   allSeedsResting(): boolean {

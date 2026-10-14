@@ -322,11 +322,13 @@ net.on('match', (m: MatchInfo & { opponentConnected: boolean }) => {
     aim: (x, z, t) => net.send({ type: 'aim', x, z, t }),
     launch: (vx, vz) => net.send({ type: 'launch', vx, vz }),
     shotResult: (seeds, hits, bust) => net.send({ type: 'shotResult', seeds, hits, bust }),
+    topie: () => net.send({ type: 'topie' }),
   });
   if (!m.opponentConnected) ui.showNetBanner(`${opponentName()} lost connection — waiting…`);
 });
 
 net.on('aim', (m) => game.remoteAim(m.x, m.z, m.t));
+net.on('topie', (m) => game.remoteTopie(m.by, m.topies));
 net.on('launch', (m) => game.remoteLaunch(m.vx, m.vz));
 net.on('state', (m) => game.applyServerState(m));
 net.on('gameOver', (m) => {
@@ -399,6 +401,17 @@ function clearRoomFromUrl() {
     try { history.replaceState(null, '', '/'); } catch { /* ignore */ }
   }
 }
+
+// ---------- Topie button ----------
+const topieBtn = document.getElementById('btn-topie') as HTMLButtonElement;
+const topieLeft = document.getElementById('topie-left')!;
+topieBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+topieBtn.addEventListener('click', (e) => { e.stopPropagation(); game.requestTopie(); });
+game.onTopieChange = ({ visible, enabled, left }) => {
+  topieBtn.classList.toggle('hidden', !visible);
+  topieBtn.disabled = !enabled;
+  topieLeft.textContent = `×${left}`;
+};
 
 // ---------- phone / browser back button → Home ----------
 // While away from the menu we keep one extra history entry, so the back

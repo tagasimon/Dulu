@@ -984,3 +984,62 @@ input, textarea {
   padding: 2px 12px 4px;
   opacity: 0.92;
 }
+
+/* Footer flows after the menu content (it used to be pinned to the bottom and
+   could cover the buttons on short screens). */
+#menu .footer-note {
+  position: static;
+  margin-top: 18px;
+  pointer-events: none;
+}
+
+/* ---------- Topie button (bottom-left, above HOME) ---------- */
+.btn-topie {
+  position: absolute;
+  left: 12px;
+  bottom: calc(env(safe-area-inset-bottom, 0) + 66px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px 6px 6px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 176, 86, 0.75);
+  background: rgba(30, 14, 6, 0.75);
+  color: var(--cream);
+  font: inherit;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  font-size: 13px;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  transition: transform 120ms, opacity 150ms, border-color 150ms;
+}
+
+.btn-topie .topie-t {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(180deg, #ffb056, #e07a2c);
+  color: #2a120a;
+  font-size: 17px;
+  letter-spacing: 0;
+}
+
+.btn-topie .topie-left {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  opacity: 0.75;
+}
+
+.btn-topie:not(:disabled):active { transform: scale(0.95); }
+
+.btn-topie:disabled {
+  opacity: 0.38;
+  cursor: default;
+  border-color: rgba(245, 230, 207, 0.25);
+}
+
+.btn-topie.hidden { display: none; }

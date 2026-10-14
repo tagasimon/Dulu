@@ -1,4 +1,4 @@
-export type ObstacleKind = 'rock' | 'pebble' | 'stick' | 'bump';
+export type ObstacleKind = 'rock' | 'boulder' | 'pebble' | 'stick' | 'bump' | 'hole';
 
 export interface ObstacleSpec {
   kind: ObstacleKind;
@@ -21,6 +21,7 @@ export interface ArenaLayout {
 export const ARENA_RADIUS: number;
 export const WIN_SCORE: number;
 export const MAX_LAUNCH_SPEED: number;
+export const TOPIES_PER_GAME: number;
 export function mulberry32(seed: number): () => number;
 export function randomSeed(): number;
 export function generateArena(seed: number): ArenaLayout;

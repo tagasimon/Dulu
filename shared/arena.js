@@ -7,9 +7,10 @@
 // players, so tiny Math.sin/cos differences between browsers can never make two
 // players see different arenas.
 
-export const ARENA_RADIUS = 9;
+export const ARENA_RADIUS = 12;     // was 9 — bigger playing field
 export const WIN_SCORE = 25;
-export const MAX_LAUNCH_SPEED = 22;
+export const MAX_LAUNCH_SPEED = 26; // a full pull carries ~18 units on dirt
+export const TOPIES_PER_GAME = 3;   // "Topie": stand the opponent's seed up
 
 export function mulberry32(seed) {
   let a = seed >>> 0;
@@ -46,6 +47,8 @@ function obstacleSize(kind, rng) {
       const len = 0.6 + rng() * 0.7;
       return { radius: Math.max(0.16, len * 0.3), len };
     }
+    case 'boulder': return { radius: 0.75 + rng() * 0.35, len: 0 };
+    case 'hole': return { radius: 0.42 + rng() * 0.3, len: 0 };
     default: return { radius: 0.35, len: 0 }; // bump
   }
 }
@@ -61,11 +64,14 @@ export function generateArena(seed) {
   const s1 = { x: round(Math.cos(angle) * d), z: round(Math.sin(angle) * d) };
   const s2 = { x: round(Math.cos(angle + Math.PI) * d), z: round(Math.sin(angle + Math.PI) * d) };
 
+  // Bigger arena, busier ground. Big pieces first so small ones fill the gaps.
   const kinds = [
-    { kind: 'rock', count: 3 + Math.floor(rng() * 3) },
-    { kind: 'pebble', count: 6 + Math.floor(rng() * 4) },
-    { kind: 'stick', count: 2 + Math.floor(rng() * 2) },
-    { kind: 'bump', count: 2 + Math.floor(rng() * 2) },
+    { kind: 'boulder', count: 1 + Math.floor(rng() * 2) },
+    { kind: 'rock', count: 6 + Math.floor(rng() * 4) },
+    { kind: 'hole', count: 3 + Math.floor(rng() * 3) },
+    { kind: 'pebble', count: 14 + Math.floor(rng() * 7) },
+    { kind: 'stick', count: 3 + Math.floor(rng() * 3) },
+    { kind: 'bump', count: 3 + Math.floor(rng() * 3) },
   ];
 
   const obstacles = [];
@@ -73,12 +79,13 @@ export function generateArena(seed) {
     for (let i = 0; i < count; i++) {
       for (let attempt = 0; attempt < 30; attempt++) {
         const a = rng() * Math.PI * 2;
-        const r = rng() * (ARENA_RADIUS - 1.2);
+        const r = Math.sqrt(rng()) * (ARENA_RADIUS - 1.2); // sqrt → spread evenly over the area, not bunched in the middle
         const x = Math.cos(a) * r;
         const z = Math.sin(a) * r;
-        // keep a clear zone around each seed
-        if (dist(x, z, s1.x, s1.z) < 1.6) continue;
-        if (dist(x, z, s2.x, s2.z) < 1.6) continue;
+        // keep a clear zone around each seed (more for big pieces)
+        const clear = kind === 'boulder' || kind === 'hole' ? 2.4 : 1.6;
+        if (dist(x, z, s1.x, s1.z) < clear) continue;
+        if (dist(x, z, s2.x, s2.z) < clear) continue;
         // avoid clustering
         let bad = false;
         for (const o of obstacles) {
@@ -86,7 +93,7 @@ export function generateArena(seed) {
         }
         if (bad) continue;
         // leave a lane between the seeds (no rocks right on the line)
-        if (kind === 'rock' && pointToSegmentDist(x, z, s1.x, s1.z, s2.x, s2.z) < 0.35) continue;
+        if ((kind === 'rock' || kind === 'boulder') && pointToSegmentDist(x, z, s1.x, s1.z, s2.x, s2.z) < 0.35 + (kind === 'boulder' ? 0.9 : 0)) continue;
 
         const size = obstacleSize(kind, rng);
         obstacles.push({

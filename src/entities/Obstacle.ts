@@ -23,7 +23,66 @@ export class Obstacle {
     this.kind = kind;
     this.pos.set(x, 0, z);
 
-    if (kind === 'rock') {
+    if (kind === 'boulder') {
+      // Big weathered boulder: two merged lumps, partly sunk into the dirt.
+      this.radius = spec.radius;
+      this.height = this.radius * 1.2;
+      this.restitution = 0.6;
+      this.significant = true;
+      const group = new THREE.Group();
+      const m = new THREE.MeshStandardMaterial({ color: 0x55382a, roughness: 0.97, flatShading: true });
+      const g1 = new THREE.DodecahedronGeometry(this.radius, 1);
+      distort(g1, 0.22, rng);
+      const main = new THREE.Mesh(g1, m);
+      main.scale.y = 0.75;
+      main.position.y = this.radius * 0.45;
+      const g2 = new THREE.DodecahedronGeometry(this.radius * 0.55, 0);
+      distort(g2, 0.2, rng);
+      const side = new THREE.Mesh(g2, new THREE.MeshStandardMaterial({ color: 0x4a3022, roughness: 1, flatShading: true }));
+      const a = rng() * Math.PI * 2;
+      side.position.set(Math.cos(a) * this.radius * 0.6, this.radius * 0.25, Math.sin(a) * this.radius * 0.6);
+      for (const mesh of [main, side]) { mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh); }
+      group.position.set(x, 0, z);
+      group.rotation.y = rng() * Math.PI;
+      this.mesh = group;
+    } else if (kind === 'hole') {
+      // A dug hole: dark pit with a lighter crumbly rim. Not solid — seeds
+      // that roll in slow down and slide toward the middle (see PhysicsWorld).
+      this.radius = spec.radius;
+      this.height = 0;
+      this.restitution = 0;
+      this.significant = false;
+      const group = new THREE.Group();
+      const rim = new THREE.Mesh(
+        new THREE.RingGeometry(this.radius * 0.92, this.radius * 1.18, 28, 1),
+        new THREE.MeshStandardMaterial({ color: 0x8a5232, roughness: 1, transparent: true, opacity: 0.9 }),
+      );
+      rim.rotation.x = -Math.PI / 2;
+      rim.position.y = 0.006;
+      // irregular rim
+      const rp = rim.geometry.attributes.position;
+      for (let i = 0; i < rp.count; i++) {
+        const k = 1 + (rng() - 0.5) * 0.12;
+        rp.setXY(i, rp.getX(i) * k, rp.getY(i) * k);
+      }
+      const pit = new THREE.Mesh(
+        new THREE.CircleGeometry(this.radius * 0.95, 28),
+        new THREE.MeshStandardMaterial({ color: 0x1c0d06, roughness: 1 }),
+      );
+      pit.rotation.x = -Math.PI / 2;
+      pit.position.y = 0.008;
+      const core = new THREE.Mesh(
+        new THREE.CircleGeometry(this.radius * 0.55, 20),
+        new THREE.MeshBasicMaterial({ color: 0x080302 }),
+      );
+      core.rotation.x = -Math.PI / 2;
+      core.position.y = 0.01;
+      pit.receiveShadow = true;
+      group.add(rim, pit, core);
+      group.position.set(x, 0, z);
+      group.rotation.y = rng() * Math.PI;
+      this.mesh = group;
+    } else if (kind === 'rock') {
       this.radius = spec.radius;
       this.height = this.radius * 1.1;
       this.restitution = 0.55;

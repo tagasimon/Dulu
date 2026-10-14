@@ -8,7 +8,7 @@ import { DustSystem } from '../effects/Dust';
 import { AudioManager } from '../audio/AudioManager';
 import { UI, Player } from '../ui/UI';
 import {
-  generateArena, randomSeed, WIN_SCORE, MAX_LAUNCH_SPEED, type ArenaLayout,
+  generateArena, randomSeed, WIN_SCORE, MAX_LAUNCH_SPEED, TOPIES_PER_GAME, type ArenaLayout,
 } from '../../shared/arena';
 
 type State =
@@ -26,6 +26,7 @@ export interface OnlineHooks {
   aim(x: number, z: number, t: number): void;
   launch(vx: number, vz: number): void;
   shotResult(seeds: [number, number][], hits: number, bust: Player | null): void;
+  topie(): void;
 }
 
 export interface MatchInfo {
@@ -37,6 +38,8 @@ export interface MatchInfo {
   seeds: [number, number][];
   phase: 'aim' | 'shot' | 'over';
   deadline: number; // ms remaining in this turn
+  topies?: [number, number];
+  topieActive?: boolean;
 }
 
 export interface ServerState {
@@ -46,6 +49,7 @@ export interface ServerState {
   deadline: number;
   hits: number;
   reason: 'shot' | 'timeout';
+  topies?: [number, number];
 }
 
 export interface ServerGameOver {
@@ -88,6 +92,14 @@ export class Game {
   private slowMoUntil = 0;
   private rollTickAccum = 0;
   private ambientDustAccum = 0;
+
+  // ----- Topie -----
+  /** Topies left for each player this game. */
+  private topiesLeft: [number, number] = [TOPIES_PER_GAME, TOPIES_PER_GAME];
+  /** Used this turn already (one per turn). */
+  private topieThisTurn = false;
+  /** HUD hook: show/hide/enable the Topie button. */
+  onTopieChange: (st: { visible: boolean; enabled: boolean; left: number }) => void = () => {};
 
   // ----- online -----
   private mode: Mode = 'local';
@@ -177,6 +189,7 @@ export class Game {
     this.scores = [m.scores[0], m.scores[1]];
     this.ui.setScore(this.scores[0], this.scores[1]);
     this.setDeadline(m.deadline);
+    if (m.topies) this.topiesLeft = [m.topies[0], m.topies[1]];
 
     if (m.phase === 'shot') {
       // Rejoined mid-shot: wait for the result, then carry on.
@@ -195,6 +208,7 @@ export class Game {
   /** Back to the menu: freeze the arena, drop pending network events. */
   stop() {
     this.state = 'MENU';
+    this.onTopieChange({ visible: false, enabled: false, left: 0 });
     this.pending = [];
     this.processingPending = false;
     this.tween = null;
@@ -203,6 +217,8 @@ export class Game {
   }
 
   private resetCommon() {
+    this.topiesLeft = [TOPIES_PER_GAME, TOPIES_PER_GAME];
+    this.topieThisTurn = false;
     this.scores = [0, 0];
     this.hitDuringShot = false;
     this.shotHits = 0;
@@ -274,6 +290,9 @@ export class Game {
     this.hitDuringShot = false;
     this.shotHits = 0;
     this.state = 'AIMING';
+    // A stood-up seed that wasn't knocked over lies back down for the new turn.
+    this.topieThisTurn = false;
+    this.seeds?.forEach((s) => s.setStanding(false));
     this.lastTurnLabel = '';
     this.ui.setActivePlayer(player, this.turnLabel());
     if (this.isMyTurn()) {
@@ -285,6 +304,55 @@ export class Game {
       this.finger.show(this.seeds[player - 1]);
       this.updateAimingCamera();
     }
+    this.refreshTopie();
+  }
+
+  // ---------- Topie ----------
+
+  /**
+   * "Topie!" — before shooting, the player can make the opponent's seed stand
+   * on its edge (tallest way up, like a coin on its side): a bigger, easier
+   * target for this shot. Limited per game; one per turn.
+   */
+  requestTopie() {
+    if (!this.canTopie()) return;
+    this.hooks?.topie();
+    this.applyTopie(this.currentPlayer);
+  }
+
+  /** Opponent called Topie (online). */
+  remoteTopie(by: Player, left?: [number, number]) {
+    if (this.mode !== 'online' || this.state !== 'AIMING' || this.currentPlayer !== by || this.topieThisTurn) return;
+    this.applyTopie(by);
+    if (left) this.topiesLeft = [left[0], left[1]];
+    this.refreshTopie();
+  }
+
+  private canTopie() {
+    return this.state === 'AIMING' && this.isMyTurn() && !this.pointerDown && !this.topieThisTurn &&
+      this.topiesLeft[this.currentPlayer - 1] > 0 && !!this.seeds;
+  }
+
+  private applyTopie(by: Player) {
+    if (!this.seeds) return;
+    this.topieThisTurn = true;
+    this.topiesLeft[by - 1] = Math.max(0, this.topiesLeft[by - 1] - 1);
+    const target = this.seeds[by === 1 ? 1 : 0];
+    target.setStanding(true);
+    this.audio.seedHitObstacle();
+    this.dust.burst(target.pos.x, target.pos.z, 8, 0.5);
+    this.ui.flashBlast('TOPIE!');
+    this.refreshTopie();
+  }
+
+  private refreshTopie() {
+    const me = this.mode === 'local' ? this.currentPlayer : this.me;
+    const myTurn = this.isMyTurn();
+    this.onTopieChange({
+      visible: this.state !== 'MENU' && this.state !== 'GAME_OVER',
+      enabled: this.canTopie(),
+      left: this.topiesLeft[(myTurn ? this.currentPlayer : me) - 1],
+    });
   }
 
   /**
@@ -332,6 +400,12 @@ export class Game {
     c.addEventListener('pointerup', (e) => this.onPointerUp(e));
     c.addEventListener('pointercancel', (e) => this.onPointerUp(e));
     c.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Keyboard shortcut: T = Topie (ignored while typing in a text box)
+    window.addEventListener('keydown', (e) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      if ((e.key === 't' || e.key === 'T') && !e.repeat) this.requestTopie();
+    });
   }
 
   private pointerGround(e: PointerEvent): THREE.Vector3 | null {
@@ -346,6 +420,7 @@ export class Game {
     // Allow generous grab zone
     if (gp.distanceTo(seed.pos) > AIM_START_RADIUS) return;
     this.pointerDown = true;
+    this.refreshTopie();
     this.aimStart.copy(gp);
     this.currentPull.set(0, 0, 0);
     (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -380,6 +455,7 @@ export class Game {
   private onPointerUp(e: PointerEvent) {
     if (!this.pointerDown || !this.seeds) { this.pointerDown = false; return; }
     this.pointerDown = false;
+    this.refreshTopie();
     if (this.state !== 'AIMING' || !this.isMyTurn()) return;
 
     const pullLen = this.currentPull.length();
@@ -420,6 +496,7 @@ export class Game {
     this.state = 'SHOOTING';
     this.ui.setActivePlayer(this.currentPlayer, this.turnLabel());
     this.ui.setHint('BLASTING…');
+    this.refreshTopie();
   }
 
   // ---------- Network events (online) ----------
@@ -479,12 +556,13 @@ export class Game {
         this.scores = [m.scores[0], m.scores[1]];
         this.ui.setScore(this.scores[0], this.scores[1]);
         this.setDeadline(m.deadline);
+        if (m.topies) this.topiesLeft = [m.topies[0], m.topies[1]];
         this.beginTurn(m.turn);
         next();
       });
     } else {
       const m = item.msg;
-      this.state = 'GAME_OVER';
+      this.state = 'GAME_OVER'; this.refreshTopie();
       this.finger.hide();
       this.settleSeeds(m.seeds, () => {
         this.scores = [m.scores[0], m.scores[1]];
@@ -531,6 +609,11 @@ export class Game {
       const other = attacker === e.a ? e.b! : e.a;
       // Only count as hit if attacker was actually moving significantly
       const attackerSpeed = Math.hypot(attacker.vel.x, attacker.vel.z) + Math.hypot(other.vel.x, other.vel.z);
+      // A stood-up seed gets knocked flat by any real contact.
+      if (attackerSpeed > 0.4) {
+        e.a.setStanding(false);
+        e.b?.setStanding(false);
+      }
       if (attackerSpeed > 0.4) {
         if (authority) {
           this.hitDuringShot = true;
@@ -580,7 +663,7 @@ export class Game {
       this.hooks?.shotResult(this.seedPositions(), this.shotHits, loser);
       return;
     }
-    this.state = 'GAME_OVER';
+    this.state = 'GAME_OVER'; this.refreshTopie();
     this.audio.gameOverBust();
     this.scene.shake(0.6);
     const winner: Player = loser === 1 ? 2 : 1;
@@ -610,6 +693,8 @@ export class Game {
       currentPlayer: this.currentPlayer,
       scores: [...this.scores],
       seeds: this.seedPositions(),
+      standing: this.seeds ? this.seeds.map((s) => s.standing) : [],
+      topies: [...this.topiesLeft],
       obstacles: this.obstacles.map((o) => [round4(o.pos.x), round4(o.pos.z), o.kind]),
       project: (x: number, z: number) => project(x, z),
     };
@@ -687,6 +772,7 @@ export class Game {
         this.dust.ambient(1, ARENA_RADIUS);
       }
 
+      if (this.seeds) for (const s of this.seeds) s.updateStand(rawDt);
       this.finger.update(dt);
       this.dust.update(dt);
       this.scene.update(dt);
@@ -720,13 +806,13 @@ export class Game {
 
       // check victory
       if (this.scores[0] >= WIN_SCORE) {
-        this.state = 'GAME_OVER';
+        this.state = 'GAME_OVER'; this.refreshTopie();
         this.audio.victory();
         this.ui.showGameOver(1, this.scores[0], this.scores[1]);
         return;
       }
       if (this.scores[1] >= WIN_SCORE) {
-        this.state = 'GAME_OVER';
+        this.state = 'GAME_OVER'; this.refreshTopie();
         this.audio.victory();
         this.ui.showGameOver(2, this.scores[0], this.scores[1]);
         return;

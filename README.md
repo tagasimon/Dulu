@@ -27,6 +27,8 @@ To test online play on your own, open the game in two different browsers (or one
 - **Hit** the opponent's seed to score +1 — and you shoot again.
 - **Miss** — turn passes to the other player.
 - **First to 25** wins.
+- **Topie (T):** before you shoot, tap **Topie** (or press **T**) to stand your opponent's seed up on its edge like a coin: taller and easier to hit for that shot. It falls flat when hit or when the turn ends. 3 per player per game, one per turn; synced online.
+- **Holes** don't block seeds but swallow them: a seed that rolls in slows down and slides to the middle, while a fast one rolls out the other side.
 - **Rare game-over:** blast your seed into a big rock at high speed and the game ends immediately with the other player winning.
 
 Works with mouse, trackpad and touch. Rotate your phone if the arena feels cramped.

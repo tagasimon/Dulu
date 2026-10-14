@@ -34,7 +34,7 @@ export class SceneManager {
     this.buildGround();
 
     this.scene.add(this.groundGroup);
-    this.scene.fog = new THREE.Fog(0x2a1608, 22, 55);
+    this.scene.fog = new THREE.Fog(0x2a1608, ARENA_RADIUS * 2.6, ARENA_RADIUS * 6.5);
 
     window.addEventListener('resize', () => this.resize());
     this.resize();
@@ -45,12 +45,13 @@ export class SceneManager {
     this.scene.add(hemi);
 
     const sun = new THREE.DirectionalLight(0xffe0b3, 1.25);
-    sun.position.set(-6, 14, 5);
+    sun.position.set(-8, 20, 7);
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
     sun.shadow.camera.near = 1;
-    sun.shadow.camera.far = 40;
-    const s = 12;
+    sun.shadow.camera.far = 60;
+    const s = ARENA_RADIUS + 4;
+    sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.camera.left = -s;
     sun.shadow.camera.right = s;
     sun.shadow.camera.top = s;
@@ -293,7 +294,9 @@ function makeGrassTuft(): THREE.Group {
 
 function makeTree(scale: number): THREE.Group {
   const g = new THREE.Group();
-  const trunkColor = 0x3d2416 + Math.floor(Math.random() * 0x080000);
+  // Bark brown with a little variation (the old version added a random number to
+  // the whole RGB value, which spilled into green/blue and made odd trunks).
+  const trunkColor = new THREE.Color().setHSL(0.07 + Math.random() * 0.02, 0.45, 0.13 + Math.random() * 0.05);
   const trunkMat = new THREE.MeshStandardMaterial({ color: trunkColor, roughness: 1 });
   const trunkH = (1.6 + Math.random() * 0.9) * scale;
   const trunk = new THREE.Mesh(

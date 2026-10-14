@@ -25,7 +25,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import {
-  generateArena, randomSeed, ARENA_RADIUS, WIN_SCORE, MAX_LAUNCH_SPEED,
+  generateArena, randomSeed, ARENA_RADIUS, WIN_SCORE, MAX_LAUNCH_SPEED, TOPIES_PER_GAME,
 } from '../shared/arena.js';
 import { openDb } from './db.js';
 import { createPayments } from './payments.js';
@@ -206,6 +206,7 @@ function matchPayload(room, seat) {
     seeds: room.seeds,
     phase: room.phase,
     deadline: Math.max(0, room.deadline - Date.now()),
+    topies: room.topies,
     opponentConnected: !!room.players[seat === 1 ? 1 : 0].ws,
   };
 }
@@ -244,6 +245,7 @@ function startGame(room, firstTurn) {
   room.layout = generateArena(randomSeed());
   room.seeds = room.layout.seeds.map((s) => [s.x, s.z]);
   room.scores = [0, 0];
+  room.topies = [TOPIES_PER_GAME, TOPIES_PER_GAME];
   room.turn = firstTurn;
   room.afk = [0, 0];
   room.rematch.clear();
@@ -256,6 +258,7 @@ function startGame(room, firstTurn) {
 function startAim(room) {
   clearTimeout(room.timer);
   room.phase = 'aim';
+  room.topieUsed = false; // one Topie per turn
   room.deadline = Date.now() + AIM_TIME_MS;
   room.timer = setTimeout(() => onAimTimeout(room), AIM_TIME_MS);
 }
@@ -267,6 +270,7 @@ function broadcastState(room, extra) {
     turn: room.turn,
     seeds: room.seeds,
     deadline: Math.max(0, room.deadline - Date.now()),
+    topies: room.topies,
     ...extra,
   };
   send(room.players[0], msg);
@@ -431,6 +435,18 @@ function handle(ws, session, msg) {
       if (!num(msg.x) || !num(msg.z) || !num(msg.t)) return;
       const opp = room.players[room.turn === 1 ? 1 : 0];
       send(opp, { type: 'aim', x: +msg.x.toFixed(3), z: +msg.z.toFixed(3), t: Math.max(0, Math.min(1, +msg.t.toFixed(3))) });
+      return;
+    }
+
+    case 'topie': {
+      // Shooter stands the opponent's seed up before shooting.
+      const room = session.room;
+      if (!room || room.phase !== 'aim' || seatOf(room, session) !== room.turn) return;
+      if (room.topieUsed || !room.topies || room.topies[room.turn - 1] <= 0) return;
+      room.topieUsed = true;
+      room.topies[room.turn - 1]--;
+      const opp = room.players[room.turn === 1 ? 1 : 0];
+      send(opp, { type: 'topie', by: room.turn, topies: room.topies });
       return;
     }
 

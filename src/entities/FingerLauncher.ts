@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Seed } from './Seed';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 
 /**
  * Real Dulu mechanic:
@@ -14,7 +15,9 @@ export class FingerLauncher {
   group = new THREE.Group();
   private base = new THREE.Group();
   private fingerPivot = new THREE.Group();
-  private finger: THREE.Mesh;
+  private finger = new THREE.Group();
+  /** middle-finger joints (proximal → distal) for a natural bend while pulled/flicked */
+  private fingerJoints: THREE.Group[] = [];
   private tipAnchor = new THREE.Group();
   private puller: THREE.Group;
   private aimArrow: THREE.Mesh;
@@ -33,150 +36,158 @@ export class FingerLauncher {
   private static HAND_LIFT = 0.04; // palm sits just above dirt
 
   constructor() {
-    const skin = new THREE.MeshStandardMaterial({ color: 0x8a5a3a, roughness: 0.75 });
-    const skinDark = new THREE.MeshStandardMaterial({ color: 0x6a4028, roughness: 0.85 });
-    const nailMat = new THREE.MeshStandardMaterial({ color: 0xf5dcb8, roughness: 0.55 });
+    // Warm brown skin with a soft sheen; slightly darker on the back of the
+    // hand and knuckles, lighter nails. MeshPhysical gives a skin-like sheen.
+    const skin = new THREE.MeshPhysicalMaterial({
+      color: 0x7a4a2c, roughness: 0.58, sheen: 0.6, sheenRoughness: 0.5,
+      sheenColor: new THREE.Color(0xc98a5e), clearcoat: 0.08, clearcoatRoughness: 0.6,
+    });
+    const skinShade = new THREE.MeshPhysicalMaterial({
+      color: 0x5e361f, roughness: 0.66, sheen: 0.4, sheenColor: new THREE.Color(0xa86a44),
+    });
+    const crease = new THREE.MeshStandardMaterial({ color: 0x5a3420, roughness: 0.9 });
+    const nailMat = new THREE.MeshPhysicalMaterial({
+      color: 0xd8b49a, roughness: 0.32, clearcoat: 0.7, clearcoatRoughness: 0.25,
+    });
 
-    // ---------- BASE HAND — palm DOWN, fingers extended forward ----------
-    // Palm: flat oval on ground
-    const palmGeo = new THREE.SphereGeometry(0.22, 20, 14);
-    scaleGeo(palmGeo, 1.15, 0.42, 1.05); // flatten strongly in Y
+    // ---------- BASE HAND — palm DOWN, fingers forward (+Z), back of hand up ----------
+    // Back of hand: rounded, slightly domed slab, wider at the knuckles.
+    const palmGeo = new RoundedBoxGeometry(0.40, 0.12, 0.36, 4, 0.055);
+    taper(palmGeo, 0.86, 1.0, 'z');       // narrower toward the wrist
+    dome(palmGeo, 0.025);                  // back of the hand is gently curved
     const palm = new THREE.Mesh(palmGeo, skin);
-    palm.position.set(0, 0.06, -0.05);
+    palm.position.set(0.01, 0.062, -0.04);
     palm.castShadow = true;
+    palm.receiveShadow = true;
     this.base.add(palm);
 
-    // Wrist trailing back
-    const wrist = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.11, 0.10, 0.38, 14),
-      skinDark
-    );
-    wrist.rotation.x = -Math.PI / 2;
-    wrist.position.set(0, 0.05, -0.36);
-    wrist.castShadow = true;
-    this.base.add(wrist);
-
-    // Extended flat fingers (index, ring, pinky) — capsules lying along ground pointing +Z
-    const otherFingers: { x: number; len: number; scale: number }[] = [
-      { x: -0.12, len: 0.42, scale: 1.0 },   // index
-      { x:  0.12, len: 0.44, scale: 0.98 },  // ring
-      { x:  0.21, len: 0.38, scale: 0.9 },   // pinky
-    ];
-    for (const f of otherFingers) {
-      const cap = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.058 * f.scale, f.len - 0.12, 4, 12),
-        skin
-      );
-      // orient along +Z (forward)
-      cap.rotation.x = Math.PI / 2;
-      cap.position.set(f.x, 0.055, 0.10 + f.len / 2);
-      cap.castShadow = true;
-      this.base.add(cap);
-      // fingernail
-      const nail = new THREE.Mesh(
-        new THREE.SphereGeometry(0.055 * f.scale, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2),
-        nailMat
-      );
-      nail.rotation.x = -Math.PI / 2;
-      nail.position.set(f.x, 0.078, 0.10 + f.len);
-      this.base.add(nail);
+    // Faint tendons running from wrist to each knuckle
+    for (const x of [-0.11, -0.035, 0.04, 0.11]) {
+      const t = new THREE.Mesh(new THREE.CapsuleGeometry(0.009, 0.22, 3, 6), skin);
+      t.rotation.x = Math.PI / 2;
+      t.rotation.y = x * 0.35;
+      t.position.set(x * 0.9, 0.118, -0.06);
+      this.base.add(t);
     }
 
-    // Thumb: pointing sideways along ground (out from palm side)
-    const thumb = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.062, 0.20, 4, 12),
-      skin
-    );
-    thumb.rotation.z = Math.PI / 2;    // lay along X
-    thumb.rotation.y = -0.35;          // angle slightly forward
-    thumb.position.set(-0.22, 0.06, 0.02);
-    thumb.castShadow = true;
-    this.base.add(thumb);
+    // Wrist + forearm trailing back and slightly up off the ground
+    const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.135, 0.105, 0.75, 18, 1), skin);
+    forearm.geometry.translate(0, -0.375, 0);
+    scaleGeo(forearm.geometry, 1.15, 1, 0.8);
+    forearm.rotation.x = Math.PI / 2 + 0.12;
+    forearm.position.set(0.01, 0.07, -0.20);
+    forearm.castShadow = true;
+    this.base.add(forearm);
+    const wristBone = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 8), skinShade);
+    wristBone.position.set(0.13, 0.085, -0.24);
+    this.base.add(wristBone);
+
+    // Index, ring, little finger: three jointed segments lying forward, tips
+    // curling down to touch the dirt.
+    const restFingers = [
+      { x: -0.135, lens: [0.19, 0.12, 0.10], r: 0.047, yaw: -0.06 },  // index
+      { x: 0.105, lens: [0.19, 0.125, 0.10], r: 0.045, yaw: 0.05 },   // ring
+      { x: 0.185, lens: [0.15, 0.10, 0.085], r: 0.039, yaw: 0.14 },   // little
+    ];
+    for (const f of restFingers) {
+      const fin = makeFinger(skin, nailMat, crease, f.lens, f.r);
+      fin.root.rotation.set(Math.PI / 2, 0, 0);
+      fin.root.rotation.y = f.yaw;
+      fin.root.position.set(f.x, 0.06, 0.13);
+      fin.joints[0].rotation.x = 0.05;
+      fin.joints[1].rotation.x = 0.16;
+      fin.joints[2].rotation.x = 0.14;
+      this.base.add(fin.root);
+      // knuckle bump
+      const k = new THREE.Mesh(new THREE.SphereGeometry(f.r * 1.15, 12, 8), skin);
+      k.scale.set(1, 0.8, 1);
+      k.position.set(f.x, 0.095, 0.12);
+      this.base.add(k);
+    }
+
+    // Thumb: two segments sweeping out to the side and forward along the dirt
+    const thumb = makeFinger(skin, nailMat, crease, [0.13, 0.11], 0.05);
+    thumb.root.position.set(-0.19, 0.055, -0.06);
+    thumb.root.rotation.set(Math.PI / 2, 0, 0);
+    thumb.root.rotation.y = -0.85;
+    thumb.joints[1].rotation.x = 0.15;
+    thumb.joints[0].rotation.z = 0.2;
+    this.base.add(thumb.root);
+    const thenar = new THREE.Mesh(new THREE.SphereGeometry(0.085, 14, 10), skin);
+    thenar.scale.set(1.1, 0.6, 1.3);
+    thenar.position.set(-0.17, 0.06, -0.08);
+    thenar.castShadow = true;
+    this.base.add(thenar);
 
     // ---------- MIDDLE FINGER (the launcher) ----------
-    // Pivot at knuckle (front edge of palm). At rest, finger extends forward along ground.
-    this.fingerPivot.position.set(0, 0.055, 0.14);
+    // Pivot at the knuckle. At rest the finger lies forward along the ground.
+    this.fingerPivot.position.set(-0.015, 0.062, 0.13);
     this.base.add(this.fingerPivot);
-
-    // Knuckle bump
-    const knuckle = new THREE.Mesh(new THREE.SphereGeometry(0.10, 14, 10), skin);
-    this.fingerPivot.add(knuckle);
+    const knuckle = new THREE.Mesh(new THREE.SphereGeometry(0.062, 14, 10), skin);
+    knuckle.scale.set(1, 0.85, 1);
+    knuckle.position.y = 0.025;
     knuckle.castShadow = true;
+    this.fingerPivot.add(knuckle);
 
-    // Finger capsule, pivot at base
-    const fingerLen = FingerLauncher.FINGER_LEN;
-    const fingerGeo = new THREE.CapsuleGeometry(0.082, fingerLen - 0.17, 6, 14);
-    fingerGeo.translate(0, fingerLen / 2, 0); // pivot at origin end
-    this.finger = new THREE.Mesh(fingerGeo, skin);
-    this.finger.castShadow = true;
-    // Rest orientation: finger flat on ground pointing +Z
+    // Three phalanges adding up to FINGER_LEN, built along +Y from the pivot.
+    const L = FingerLauncher.FINGER_LEN;
+    const mid = makeFinger(skin, nailMat, crease, [L * 0.44, L * 0.31, L * 0.25], 0.056);
+    this.finger.add(mid.root);
+    this.fingerJoints = mid.joints;
+    // Rest orientation: flat on ground pointing +Z
     this.finger.rotation.x = Math.PI / 2;
     this.fingerPivot.add(this.finger);
 
-    // Tip anchor: follows fingertip
-    this.tipAnchor.position.set(0, fingerLen, 0);
-    this.finger.add(this.tipAnchor);
+    // Tip anchor: follows the fingertip (end of the last phalanx)
+    mid.tip.add(this.tipAnchor);
 
-    // Fingernail at tip
-    const nailTip = new THREE.Mesh(
-      new THREE.SphereGeometry(0.088, 12, 10, 0, Math.PI * 2, 0, Math.PI / 2),
-      nailMat
-    );
-    nailTip.rotation.x = -Math.PI / 2;
-    nailTip.position.set(0, 0.015, 0);
-    this.tipAnchor.add(nailTip);
-
-    // ---------- PULLER HAND — reaches DOWN from above, pinches tip ----------
+    // ---------- PULLER HAND — reaches down from above and pinches the tip ----------
+    // Built in the tip's frame: local +Y points away from the fingertip (up/back
+    // toward the puller's forearm); the pinch is at the origin.
     this.puller = new THREE.Group();
 
-    // Pinching hand: small palm oriented so open side faces the fingertip (i.e., down).
-    // We build with local -Y as "down toward tip", +Y as "up-back toward puller's forearm".
-    const pPalmGeo = new THREE.SphereGeometry(0.20, 18, 12);
-    scaleGeo(pPalmGeo, 1.0, 0.6, 1.0);
+    const pPalmGeo = new RoundedBoxGeometry(0.30, 0.11, 0.26, 4, 0.05);
+    dome(pPalmGeo, 0.02);
     const pPalm = new THREE.Mesh(pPalmGeo, skin);
-    pPalm.position.set(0, 0.14, -0.02); // palm sits above the grip
+    pPalm.position.set(0.04, 0.30, 0.0);
+    pPalm.rotation.set(0.25, 0, -0.15);
     pPalm.castShadow = true;
     this.puller.add(pPalm);
 
-    // Thumb of pincher curling down toward tip (in local -Y direction)
-    const pThumb = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.055, 0.18, 4, 10),
-      skin
-    );
-    pThumb.rotation.x = 0.5; // tilt fingertip-ward
-    pThumb.position.set(-0.10, 0.02, 0.10);
-    pThumb.castShadow = true;
-    this.puller.add(pThumb);
+    // Index finger and thumb come down and meet at the fingertip.
+    const pIndex = makeFinger(skin, nailMat, crease, [0.13, 0.09, 0.075], 0.042);
+    pIndex.root.position.set(0.075, 0.26, 0.02);
+    pIndex.root.rotation.set(0, 0, Math.PI - 0.22);
+    pIndex.joints[1].rotation.x = 0.35;
+    pIndex.joints[2].rotation.x = 0.3;
+    this.puller.add(pIndex.root);
 
-    // Index finger of pincher (opposing thumb)
-    const pIndex = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.055, 0.20, 4, 10),
-      skin
-    );
-    pIndex.rotation.x = -0.5;
-    pIndex.position.set(0.09, 0.02, -0.02);
-    pIndex.castShadow = true;
-    this.puller.add(pIndex);
+    const pThumb = makeFinger(skin, nailMat, crease, [0.12, 0.10], 0.048);
+    pThumb.root.position.set(-0.10, 0.22, 0.03);
+    pThumb.root.rotation.set(0, 0, -(Math.PI - 0.42));
+    pThumb.joints[1].rotation.x = -0.25;
+    this.puller.add(pThumb.root);
 
-    // Two curled remaining fingers (bumps)
-    for (let i = 0; i < 2; i++) {
-      const bump = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), skinDark);
-      bump.position.set(0.14 + i * 0.06, 0.10, -0.05);
-      bump.castShadow = true;
-      this.puller.add(bump);
-    }
+    // The other three fingers curled into the palm (loose fist)
+    [0.04, 0.115, 0.18].forEach((x, i) => {
+      const cf = makeFinger(skin, nailMat, crease, [0.10, 0.075, 0.06], 0.04 - i * 0.003);
+      cf.root.position.set(x, 0.27, -0.06);
+      cf.root.rotation.set(0.2, 0, Math.PI - 0.05);
+      cf.joints[0].rotation.x = 0.9;
+      cf.joints[1].rotation.x = 1.25;
+      cf.joints[2].rotation.x = 0.9;
+      this.puller.add(cf.root);
+    });
 
-    // Forearm going up-back from puller
-    const pWrist = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.10, 0.09, 0.55, 12),
-      skinDark
-    );
-    pWrist.position.set(0, 0.42, -0.10);
-    pWrist.rotation.x = 0.35; // tilts back
-    pWrist.castShadow = true;
-    this.puller.add(pWrist);
+    // Forearm rising up-and-back out of view
+    const pArm = new THREE.Mesh(new THREE.CylinderGeometry(0.115, 0.13, 0.85, 16), skin);
+    pArm.geometry.translate(0, 0.425, 0);
+    scaleGeo(pArm.geometry, 1.1, 1, 0.85);
+    pArm.position.set(0.03, 0.33, -0.02);
+    pArm.rotation.set(-0.35, 0, -0.1);
+    pArm.castShadow = true;
+    this.puller.add(pArm);
 
-    // Attach puller at the tip; we'll position/orient in update
     this.tipAnchor.add(this.puller);
     this.puller.visible = false;
 
@@ -327,6 +338,15 @@ export class FingerLauncher {
     const maxBackAngle = 1.55;
     const angle = Math.PI / 2 - this.bendAmount * maxBackAngle;
     this.finger.rotation.x = angle;
+    // Natural joint flex: pulled back, the finger arches backwards; on the
+    // follow-through it curls a little; at rest the tip droops to the dirt.
+    const b = this.bendAmount;
+    const [j0, j1, j2] = this.fingerJoints;
+    if (j0 && j1 && j2) {
+      j0.rotation.x = b > 0 ? -0.10 * b : -0.25 * b;
+      j1.rotation.x = b > 0 ? 0.10 - 0.32 * b : 0.10 - 0.5 * b;
+      j2.rotation.x = b > 0 ? 0.08 - 0.22 * b : 0.08 - 0.35 * b;
+    }
 
     // Puller fades
     this.pullerVisibility += (this.targetPullerVisibility - this.pullerVisibility) * Math.min(1, dt * 22);
@@ -337,6 +357,95 @@ export class FingerLauncher {
     this.puller.position.set(0, pullOffset, 0);
     this.puller.scale.setScalar(0.65 + this.pullerVisibility * 0.55);
   }
+}
+
+/**
+ * A finger as a chain of tapered phalanges along local +Y with a joint group at
+ * each knuckle (rotate joints[i].rotation.x to curl), skin creases at the
+ * joints, and a nail on the back (local -Z) of the last segment.
+ */
+function makeFinger(
+  skin: THREE.Material, nailMat: THREE.Material, creaseMat: THREE.Material,
+  lengths: number[], radius: number,
+) {
+  const root = new THREE.Group();
+  const joints: THREE.Group[] = [];
+  let parent: THREE.Object3D = root;
+  let r = radius;
+  let offset = 0;
+  lengths.forEach((len, i) => {
+    const joint = new THREE.Group();
+    joint.position.y = offset;
+    parent.add(joint);
+    const r2 = r * 0.9; // taper along each segment
+    const geo = new THREE.CylinderGeometry(r2, r, Math.max(0.001, len - r * 0.4), 14, 1, true);
+    geo.translate(0, len / 2, 0);
+    scaleGeo(geo, 1.08, 1, 0.9); // fingers are a bit wider than tall
+    const seg = new THREE.Mesh(geo, skin);
+    seg.castShadow = true;
+    joint.add(seg);
+    // rounded knuckle at the base of each segment
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(r * 1.02, 14, 10), skin);
+    ball.scale.set(1.08, 1, 0.92);
+    ball.castShadow = true;
+    joint.add(ball);
+    if (i > 0) {
+      // skin crease on the back of the joint
+      const c = new THREE.Mesh(new THREE.TorusGeometry(r * 0.99, r * 0.045, 4, 12, Math.PI * 0.6), creaseMat);
+      c.rotation.set(Math.PI / 2, Math.PI, Math.PI * 0.1);
+      c.position.y = 0.002;
+      joint.add(c);
+    }
+    if (i === lengths.length - 1) {
+      // rounded tip
+      const tipBall = new THREE.Mesh(new THREE.SphereGeometry(r2 * 1.0, 14, 10), skin);
+      tipBall.scale.set(1.08, 1.1, 0.9);
+      tipBall.position.y = len - r * 0.2;
+      tipBall.castShadow = true;
+      joint.add(tipBall);
+      // nail on the back of the last segment
+      const nail = new THREE.Mesh(new THREE.SphereGeometry(r2 * 0.95, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), nailMat);
+      nail.scale.set(0.95, 1.55, 0.35);
+      nail.rotation.x = -Math.PI / 2;
+      nail.position.set(0, len * 0.66, -r2 * 0.78);
+      joint.add(nail);
+    }
+    joints.push(joint);
+    parent = joint;
+    offset = len - r * 0.2;
+    r = r2;
+  });
+  const tip = new THREE.Group();
+  tip.position.y = offset + r * 0.2;
+  parent.add(tip);
+  return { root, joints, tip };
+}
+
+/** Narrow a geometry along an axis (0 = far end scale, 1 = near end). */
+function taper(g: THREE.BufferGeometry, back: number, front: number, axis: 'z') {
+  g.computeBoundingBox();
+  const bb = g.boundingBox!;
+  const pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const t = (pos.getZ(i) - bb.min.z) / (bb.max.z - bb.min.z);
+    const k = back + (front - back) * t;
+    pos.setX(i, pos.getX(i) * k);
+  }
+  g.computeVertexNormals();
+}
+
+/** Push the top surface up in the middle (domed back of the hand). */
+function dome(g: THREE.BufferGeometry, amount: number) {
+  g.computeBoundingBox();
+  const bb = g.boundingBox!;
+  const hx = (bb.max.x - bb.min.x) / 2, hz = (bb.max.z - bb.min.z) / 2;
+  const pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    if (pos.getY(i) <= 0) continue;
+    const nx = pos.getX(i) / hx, nz = pos.getZ(i) / hz;
+    pos.setY(i, pos.getY(i) + amount * Math.max(0, 1 - nx * nx) * Math.max(0, 1 - nz * nz));
+  }
+  g.computeVertexNormals();
 }
 
 function scaleGeo(g: THREE.BufferGeometry, sx: number, sy: number, sz: number) {

@@ -11,6 +11,17 @@ export class Seed {
   angularVel = new THREE.Vector3();
   playerId: 1 | 2;
 
+  /** Extra hit radius while stood up with "Topie" (physics reads this). */
+  hitBonus = 0;
+  /** 0 = lying flat, 1 = standing on its edge like a coin. */
+  private standT = 0;
+  private standTarget = 0;
+  /** Orientation from rolling; the displayed orientation blends to "standing". */
+  private rollQuat = new THREE.Quaternion();
+  private static UPRIGHT = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
+  private tmpQ = new THREE.Quaternion();
+  private ring!: THREE.Mesh;
+
   constructor(playerId: 1 | 2) {
     this.playerId = playerId;
     this.mesh = new THREE.Group();
@@ -53,6 +64,7 @@ export class Seed {
     const ringGeo = new THREE.RingGeometry(SEED_RADIUS * 2.0, SEED_RADIUS * 2.6, 32);
     ringGeo.rotateX(-Math.PI / 2);
     const ring = new THREE.Mesh(ringGeo, ringMat);
+    this.ring = ring;
     ring.position.y = -SEED_RADIUS + 0.005;
     this.mesh.add(ring);
 
@@ -88,12 +100,49 @@ export class Seed {
 
   syncMesh() {
     this.mesh.position.copy(this.pos);
-    // Rotate based on velocity (rolling)
+    // Rotate based on velocity (rolling) — only while lying down
     const speed = Math.hypot(this.vel.x, this.vel.z);
-    if (speed > 0.01) {
+    if (speed > 0.01 && this.standT < 0.05) {
       const axis = new THREE.Vector3(-this.vel.z, 0, this.vel.x).normalize();
       const angle = (speed / this.radius) * 0.016; // per-frame guess; harmless
-      this.body.rotateOnWorldAxis(axis, angle);
+      this.tmpQ.setFromAxisAngle(axis, angle);
+      this.rollQuat.premultiply(this.tmpQ);
+    }
+    this.applyPose();
+  }
+
+  /**
+   * "Topie": stand the seed on its edge (tallest way up) so it's a bigger,
+   * more visible target. It falls flat again when hit or when the turn ends.
+   */
+  setStanding(on: boolean) {
+    this.standTarget = on ? 1 : 0;
+    this.hitBonus = on ? SEED_RADIUS * 0.55 : 0;
+  }
+
+  get standing() { return this.standTarget > 0; }
+
+  /** Animate standing up / toppling. Call every frame. */
+  updateStand(dt: number) {
+    if (Math.abs(this.standT - this.standTarget) < 0.001) return;
+    // Standing up is a quick flick; falling over is a little slower.
+    const rate = this.standTarget > this.standT ? 9 : 6;
+    this.standT += (this.standTarget - this.standT) * Math.min(1, dt * rate);
+    if (Math.abs(this.standT - this.standTarget) < 0.002) this.standT = this.standTarget;
+    this.applyPose();
+  }
+
+  private applyPose() {
+    const t = this.standT;
+    const e = t * t * (3 - 2 * t); // smoothstep
+    this.body.quaternion.copy(this.rollQuat).slerp(Seed.UPRIGHT, e);
+    // Lift so it rests on its edge instead of sinking into the dirt, with a
+    // tiny wobble at the top of the stand-up.
+    this.body.position.y = e * SEED_RADIUS * 0.42 + Math.sin(e * Math.PI) * 0.03;
+    // Brighter, bigger ground ring while standing so it's easy to spot.
+    if (this.ring) {
+      this.ring.scale.setScalar(1 + e * 0.45);
+      (this.ring.material as THREE.MeshBasicMaterial).opacity = 0.55 + e * 0.4;
     }
   }
 

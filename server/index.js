@@ -27,6 +27,8 @@ import { WebSocketServer } from 'ws';
 import {
   generateArena, randomSeed, ARENA_RADIUS, WIN_SCORE, MAX_LAUNCH_SPEED,
 } from '../shared/arena.js';
+import { openDb } from './db.js';
+import { createPayments } from './payments.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -70,6 +72,25 @@ const rooms = new Map();
  */
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
+
+// ---------- payments ("buy me a coffee") ----------
+const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
+const db = openDb(path.join(DATA_DIR, 'dulu.db'));
+const payments = createPayments({
+  db,
+  log,
+  // A coffee was confirmed: tell that player's open game right away.
+  onPassGranted: (guestId, expiresAt) => {
+    send(sessions.get(guestId), { type: 'pass', pass: { active: true, expiresAt } });
+  },
+});
+
+/** Online play needs an active coffee (unless payments aren't configured). */
+function requireCoffee(session) {
+  if (payments.hasPass(session.guestId)) return true;
+  send(session, { type: 'error', code: 'NEED_COFFEE', message: 'Online play needs a coffee.' });
+  return false;
+}
 
 // ---------- helpers ----------
 function send(session, msg) {
@@ -296,6 +317,7 @@ function handle(ws, session, msg) {
 
     case 'queue': {
       if (isActive(session.room)) return send(session, { type: 'error', code: 'IN_GAME', message: 'Already in a game.' });
+      if (!requireCoffee(session)) return;
       closeHosting(session);
       leaveRoom(session, 'queue');
       if (queue.includes(session)) return send(session, { type: 'queued' });
@@ -311,6 +333,7 @@ function handle(ws, session, msg) {
 
     case 'createRoom': {
       if (isActive(session.room)) return send(session, { type: 'error', code: 'IN_GAME', message: 'Already in a game.' });
+      if (!requireCoffee(session)) return; // the friend who joins plays free
       removeFromQueue(session);
       leaveRoom(session, 'createRoom');
       closeHosting(session);
@@ -443,6 +466,7 @@ function attach(ws, hello) {
     online: onlineCount(),
     playing: playingCount(),
     inGame: !!(room && isActive(room)),
+    coffee: payments.config(session.guestId),
   });
 
   if (room) {
@@ -566,7 +590,11 @@ function serveStatic(req, res) {
 const server = http.createServer((req, res) => {
   if (req.url === '/healthz') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify({ ok: true, online: onlineCount(), playing: playingCount(), queue: queue.length }));
+    return res.end(JSON.stringify({ ok: true, online: onlineCount(), playing: playingCount(), queue: queue.length, payments: payments.enabled }));
+  }
+  if (req.url && (req.url.startsWith('/relworx/') || req.url.startsWith('/api/coffee'))) {
+    payments.route(req, res, clientIp(req));
+    return;
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
   serveStatic(req, res);
@@ -670,6 +698,7 @@ process.on('unhandledRejection', (err) => { log('unhandledRejection', err); });
 
 server.listen(PORT, () => {
   log(`DULU server on :${PORT} — static from ${STATIC_DIR}`);
+  log(`payments: ${payments.enabled ? `ON — ${payments.priceUgx} UGX per coffee = ${payments.passHours}h online` : 'OFF (Relworx env vars not set) — online play is free'}; data in ${DATA_DIR}`);
   log(`limits: ${MAX_CONNECTIONS} connections, ${MAX_CONNECTIONS_PER_IP}/IP; origins: ${ALLOWED_ORIGINS.join(", ") || "any"}`);
 });
 
@@ -677,7 +706,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
     log('shutting down');
     for (const ws of wss.clients) try { ws.close(1012, 'server restarting'); } catch {}
-    server.close(() => process.exit(0));
+    server.close(() => { try { db.close(); } catch {} process.exit(0); });
     setTimeout(() => process.exit(0), 2000).unref();
   });
 }

@@ -85,6 +85,7 @@ Nothing to change in Coolify: still the Dockerfile build pack, still port 80. Me
 | `RECONNECT_GRACE_MS` | `45000` | How long a dropped player has to come back before forfeiting. |
 
 ### Things to know
+- **Add the `/data` volume** (Persistent Storage) once payments are on. See *Buy me a coffee* below.
 - **Keep it at one instance.** Matches live in the server's memory, so don't scale to multiple replicas or containers. One instance easily handles hundreds of simultaneous games on a small VPS (~70 MB RAM).
 - **Redeploys end live matches.** Players see "match lost" and can start a new one, so deploy when it's quiet.
 - **CI:** `.github/workflows/docker.yml` builds the exact image on every push, starts it, and checks the page, `/healthz` and the WebSocket handshake. A green tick on GitHub means Coolify's build will work.
@@ -98,10 +99,53 @@ docker run --rm -p 8080:80 dulu
 # open http://localhost:8080 in two browsers
 ```
 
+## Buy me a coffee (Relworx mobile money)
+
+Same Device is always free. **Online play** (Play Online, and *creating* a friend room) needs a coffee: **1 coffee = 2,000 UGX = 24 hours**, and buying more stacks extra days. A friend who opens your room link plays free. The menu shows one quiet line ("Online play runs on coffee ☕"), and the coffee sheet explains it keeps the server's lights on.
+
+How a purchase works:
+1. The player picks how many coffees and enters their MTN/Airtel number (never a PIN).
+2. The server saves a `PENDING` payment, then asks Relworx to collect. Relworx pushes the Mobile Money PIN prompt to the phone.
+3. The game polls `/relworx/status` every 3 s (up to 90 s). Meanwhile Relworx also calls our webhook. Whichever arrives first marks the payment `SUCCESS` (exactly once) and adds the time to that player's pass. The player's open game unlocks instantly.
+4. Money lands in the shared Relworx float. There are **no payouts here**; cash-out happens in Jukila.
+
+Passes are tied to the player's anonymous browser ID. On a new phone or browser, **"Already bought one? Restore it"** copies an active pass across using the number they paid with.
+
+**If the Relworx variables aren't set, payments are off and online play is free**, so you can deploy safely before configuring anything.
+
+### Environment variables (set in Coolify → Environment Variables, never commit them)
+| Variable | Example | Notes |
+|---|---|---|
+| `RELWORX_API_KEY` | *(from Relworx)* | Shared with Jukila so funds credit the same float. |
+| `RELWORX_ACCOUNT_NO` | *(from Relworx)* | Shared with Jukila. |
+| `RELWORX_WEBHOOK_SECRET` | *(from Relworx)* | Shared with Jukila. Used to verify `x-relworx-signature`. |
+| `APP_REF_PREFIX` | `DULU-` | **Must differ from Jukila's `JK-`/`JKP-`**; the server refuses to start with those. |
+| `WEBHOOK_PUBLIC_URL` | `https://dulu.yourdomain.com/relworx/webhook` | For your records: this is the URL you register in Relworx. |
+| `COFFEE_PRICE_UGX` | `2000` | Optional. |
+| `PASS_HOURS` | `24` | Optional. Hours of online play per coffee. |
+
+### One-time setup
+1. **Persistent storage:** Coolify → DULU app → *Persistent Storage* → add a volume with destination path **`/data`**. Payments and passes live in `/data/dulu.db` (SQLite). Without the volume, every redeploy forgets who has paid.
+2. **Env vars:** add the variables above, then redeploy. The deploy log should show `payments: ON — 2000 UGX per coffee = 24h online`.
+3. **Relworx dashboard:** in the account shared with Jukila, add the webhook URL `https://<your-dulu-domain>/relworx/webhook`. Payments still confirm without it (via polling), but the webhook catches players who close the page before approving.
+4. **Test with a real coffee:** Play Online → buy 1 coffee with your own number → approve → you should see "Thank you! ☕" and start matchmaking. The deploy log shows `payment DULU-… SUCCESS +1 coffee(s)`.
+
+### Endpoints
+- `POST /relworx/collect` with `{ phone, coffees | amountUgx, guestId }`: starts a collection. Rate-limited per IP and per phone number so nobody can spam prompts to a stranger's phone.
+- `GET /relworx/status?reference=…`: the poll fallback.
+- `POST /relworx/webhook`: Relworx → us, HMAC-SHA256 signed. Returns 401 on a bad signature and 200 otherwise, including unknown references.
+- `GET /api/coffee?guestId=…` and `POST /api/coffee/restore`: pass status and restore.
+
+### Tests
+`npm test` runs 23 tests against a mocked Relworx. They cover phone normalisation, collect validation, the row being saved before the Relworx call, error passthrough, webhook signatures, unknown references, retries, exactly-once finalisation under webhook + poll races, stacking and expiry, and restore. To look at what's been paid on the server: `sqlite3 /data/dulu.db "select reference, msisdn, amount_ugx, status, created_at from payments order by created_at desc limit 20"` (or copy the file off the volume).
+
 ## Structure
 
 ```
 server/index.js           multiplayer server: matchmaking, rooms, turns, reconnects, static files
+server/payments.js        Relworx collections (collect / status / webhook), coffee passes
+server/db.js              SQLite schema (payments, passes); built into Node 22, no extra dependency
+test/payments.test.js     payment tests (npm test)
 shared/arena.js           seeded arena generator shared by server + game (+ arena.d.ts types)
 src/
   main.ts                 entry, wires UI + Game + network
@@ -116,6 +160,7 @@ src/
   effects/Dust.ts         warm dust burst + rolling trail particles
   audio/AudioManager.ts   WebAudio-synthesized launch/thwack/roll SFX
   ui/UI.ts                HUD/menu/lobby/tutorial/game-over DOM controllers
+  ui/Coffee.ts            buy-me-a-coffee sheet (stepper, phone, polling, restore)
   net/Net.ts              WebSocket client with auto-reconnect
   net/identity.ts         anonymous guest ID + nickname (localStorage)
 ```

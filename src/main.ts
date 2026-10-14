@@ -3,6 +3,7 @@ import { Game, type MatchInfo, type ServerGameOver } from './game/Game';
 import { UI, type Player } from './ui/UI';
 import { Net } from './net/Net';
 import { identity } from './net/identity';
+import { CoffeeSheet, type CoffeeConfig } from './ui/Coffee';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 const ui = new UI();
@@ -20,6 +21,9 @@ type Phase =
   | { kind: 'online'; you: Player; names: [string, string]; over: boolean; rematchAsked: boolean; opponentGone: boolean };
 
 let phase: Phase = { kind: 'menu' };
+const coffee = new CoffeeSheet(() => identity.guestId);
+/** What to resume if the server says a coffee is needed (e.g. it just expired). */
+let pendingOnlineAction: (() => void) | null = null;
 let slowSearchTimer: number | null = null;
 let awayTimer: number | null = null;
 
@@ -38,7 +42,26 @@ ui.onPlay = () => {
   game.startNewGame();
 };
 
-ui.onPlayOnline = () => startSearching();
+// ---------- coffee (online play) ----------
+
+/** Run an online action now, or after the player buys a coffee. Same Device never asks. */
+function withCoffee(action: () => void) {
+  pendingOnlineAction = action;
+  if (coffee.unlocked) action();
+  else coffee.open(action);
+}
+
+const coffeeStatusEl = document.getElementById('coffee-status')!;
+const coffeeStatusText = document.getElementById('coffee-status-text')!;
+const coffeeStatusCta = document.getElementById('coffee-status-cta')!;
+coffeeStatusCta.addEventListener('click', () => coffee.open());
+coffee.onChange = () => {
+  const st = coffee.menuStatus();
+  coffeeStatusEl.classList.toggle('hidden', !st);
+  if (st) { coffeeStatusText.textContent = st.text; coffeeStatusCta.textContent = st.cta; }
+};
+
+ui.onPlayOnline = () => withCoffee(startSearching);
 ui.onPlayFriend = () => {
   phase = { kind: 'friend' };
   ui.showLobby({ kind: 'friend' });
@@ -63,10 +86,14 @@ function clearSlowTimer() {
   if (slowSearchTimer !== null) { clearTimeout(slowSearchTimer); slowSearchTimer = null; }
 }
 
-ui.onCreateRoom = () => {
+function createRoom() {
+  phase = { kind: 'friend' };
   ui.showLobby({ kind: 'connecting' });
   net.send({ type: 'createRoom' });
-};
+}
+
+// Only the room creator needs a coffee — the friend who joins plays free.
+ui.onCreateRoom = () => withCoffee(createRoom);
 
 ui.onJoinRoom = (code) => joinRoom(code);
 
@@ -147,7 +174,7 @@ ui.onRestart = () => {
 
 ui.onNewOpponent = () => {
   net.send({ type: 'leave' });
-  startSearching();
+  withCoffee(startSearching);
 };
 
 ui.onMenu = () => {
@@ -194,6 +221,7 @@ game.onOnlineGameOver = (m: ServerGameOver) => {
 
 net.on('welcome', (m) => {
   ui.setOnlineCount(m.online);
+  if (m.coffee) coffee.setConfig(m.coffee as CoffeeConfig);
   if (phase.kind === 'online' && !phase.over && !m.inGame) {
     // Server restarted or our match expired while we were away.
     game.stop();
@@ -225,7 +253,19 @@ net.on('roomCreated', (m) => {
   ui.showLobby({ kind: 'room', code: m.code, shareUrl: shareUrl(m.code) });
 });
 
+net.on('pass', (m) => coffee.setPass(m.pass));
+
 net.on('error', (m) => {
+  if (m.code === 'NEED_COFFEE') {
+    // Server is the judge (e.g. the pass expired a moment ago).
+    clearSlowTimer();
+    const resume = pendingOnlineAction ?? startSearching;
+    coffee.setPass({ active: false, expiresAt: null });
+    if (!coffee.config.enabled) coffee.setConfig({ ...coffee.config, enabled: true });
+    goToMenu();
+    coffee.open(resume);
+    return;
+  }
   if (m.code === 'ROOM_NOT_FOUND' || m.code === 'HOST_OFFLINE' || m.code === 'ROOM_EXPIRED') {
     clearRoomFromUrl();
     phase = { kind: 'friend' };
@@ -323,6 +363,12 @@ function clearRoomFromUrl() {
 // ---------- boot ----------
 
 if (new URLSearchParams(location.search).has('debug')) (window as any).__dulu = game;
+
+// Menu status line before the socket connects.
+fetch(`/api/coffee?guestId=${encodeURIComponent(identity.guestId)}`)
+  .then((r) => (r.ok ? r.json() : null))
+  .then((c) => { if (c) coffee.setConfig(c); })
+  .catch(() => { /* server offline: online buttons will say so */ });
 
 game.init().then(() => {
   ui.showMenu();

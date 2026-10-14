@@ -1,15 +1,16 @@
 {
   "name": "dulu",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:server": "node --watch server/index.js",
+    "dev:server": "node --watch --disable-warning=ExperimentalWarning server/index.js",
     "build": "tsc && vite build",
-    "start": "node server/index.js",
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
     "preview": "vite preview",
-    "check": "tsc --noEmit && node --check server/index.js"
+    "check": "tsc --noEmit && node --check server/index.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "ws": "^8.18.0"
@@ -21,6 +22,6 @@
     "vite": "^5.4.10"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   }
 }

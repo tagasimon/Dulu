@@ -9,3 +9,6 @@ npm-debug.log*
 .idea
 # Vite temp files (left behind if a build is interrupted)
 *.timestamp-*.mjs
+
+# Local SQLite database (payments, passes)
+data/

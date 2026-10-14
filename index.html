@@ -45,6 +45,10 @@
           <button id="btn-play" class="btn-secondary">SAME DEVICE</button>
           <button id="btn-how" class="btn-text">HOW TO PLAY</button>
         </div>
+        <div id="coffee-status" class="coffee-status hidden">
+          <span id="coffee-status-text"></span>
+          <button id="coffee-status-cta" class="link-btn" type="button"></button>
+        </div>
         <div class="footer-note"><span id="online-count"></span>First to 25 wins</div>
       </div>
 
@@ -78,6 +82,71 @@
         </div>
       </div>
 
+      <div id="coffee" class="hidden" role="dialog" aria-modal="true" aria-labelledby="coffee-title">
+        <div class="coffee-card">
+
+          <div id="coffee-buy">
+            <h2 id="coffee-title">BUY ME A COFFEE</h2>
+            <p class="coffee-why">DULU is free on one device. Online games run on a small server that costs real money every month — a coffee helps keep the lights on.</p>
+            <div class="coffee-picker">
+              <button type="button" id="coffee-minus" class="step-btn" aria-label="One less coffee">−</button>
+              <div class="coffee-amount">
+                <div id="coffee-cups" class="coffee-cups">☕</div>
+                <div><b id="coffee-count">1 coffee</b> · <span id="coffee-duration">1 day online</span></div>
+              </div>
+              <button type="button" id="coffee-plus" class="step-btn" aria-label="One more coffee">+</button>
+            </div>
+            <div id="coffee-price-note" class="coffee-small"></div>
+            <div id="coffee-current" class="coffee-small coffee-current"></div>
+            <form id="coffee-form" class="coffee-form" autocomplete="on">
+              <label for="coffee-phone">MTN or Airtel Mobile Money number</label>
+              <input id="coffee-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="0772 123456" maxlength="16" />
+              <div id="coffee-error" class="lobby-error-inline"></div>
+              <button id="coffee-buy-btn" type="submit" class="btn-primary">BUY 1 COFFEE · 2,000 UGX</button>
+            </form>
+            <div class="coffee-small">You'll get a prompt on your phone to approve with your PIN. We never ask for your PIN here.</div>
+            <button id="coffee-restore-link" type="button" class="link-btn">Already bought one? Restore it</button>
+          </div>
+
+          <div id="coffee-waiting" class="hidden">
+            <h2>CHECK YOUR PHONE</h2>
+            <div class="seed-spinner"><i></i><i></i></div>
+            <p class="coffee-why">Approve the Mobile Money prompt with your PIN. This page updates by itself once it goes through.</p>
+          </div>
+
+          <div id="coffee-success" class="hidden">
+            <h2 id="coffee-success-title">THANK YOU! ☕</h2>
+            <p id="coffee-success-text" class="coffee-why"></p>
+            <button id="coffee-continue" type="button" class="btn-primary">PLAY NOW</button>
+          </div>
+
+          <div id="coffee-failed" class="hidden">
+            <h2>THAT DIDN'T GO THROUGH</h2>
+            <p id="coffee-failed-text" class="coffee-why"></p>
+            <p class="coffee-small">No money was taken. You can try again, maybe with a different number.</p>
+            <button id="coffee-retry" type="button" class="btn-primary">TRY AGAIN</button>
+          </div>
+
+          <div id="coffee-slow" class="hidden">
+            <h2>STILL WAITING…</h2>
+            <p class="coffee-why">We haven't heard back from Mobile Money yet. If you approved it, online play unlocks automatically as soon as it's confirmed, even if you close this.</p>
+          </div>
+
+          <div id="coffee-restore" class="hidden">
+            <h2>RESTORE YOUR COFFEE</h2>
+            <p class="coffee-why">On a new phone or browser? Enter the number you paid with to bring your online time across.</p>
+            <form id="coffee-restore-form" class="coffee-form">
+              <input id="coffee-restore-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="0772 123456" maxlength="16" />
+              <div id="coffee-restore-error" class="lobby-error-inline"></div>
+              <button type="submit" class="btn-primary">RESTORE</button>
+            </form>
+            <button id="coffee-back" type="button" class="link-btn">Back</button>
+          </div>
+
+          <button id="coffee-close" type="button" class="btn-text">NOT NOW</button>
+        </div>
+      </div>
+
       <div id="tutorial" class="hidden">
         <div class="tut-card">
           <h2>HOW TO PLAY</h2>
@@ -89,7 +158,7 @@
             <li><b>Keep blasting</b> — on a hit you shoot again.</li>
             <li><b>Miss</b> — turn passes to the other player.</li>
             <li><b>First to 25</b> hits wins.</li>
-            <li><b>Online</b> — no sign-up. Tap <i>Play Online</i> to meet a random player, or <i>Play a Friend</i> to send a room link.</li>
+            <li><b>Online</b> — no sign-up. Tap <i>Play Online</i> to meet a random player, or <i>Play a Friend</i> to send a room link. Online play runs on coffee (1 = 24 hours); your friend joins free.</li>
           </ol>
           <button id="btn-close-tut" class="btn-primary">GOT IT</button>
         </div>

@@ -117,9 +117,9 @@ The region comes from the browser's timezone, so it's a soft gate: someone deter
 Players and the server see who's around: the menu shows a live pill ("3 other players online · 1 in games", or "1 player waiting for a match — tap Play Online" when someone's in the queue), updated within ~1.5 s.
 
 How a purchase works:
-1. The player picks how many coffees and enters their MTN/Airtel number (never a PIN).
+1. The player picks how many Rolexes and enters their MTN/Airtel number (never a PIN).
 2. The server saves a `PENDING` payment, then asks Relworx to collect. Relworx pushes the Mobile Money PIN prompt to the phone.
-3. The game polls `/relworx/status` every 3 s (up to 90 s), and the **server also checks every pending payment with Relworx in the background**: every ~20 s for the first 15 minutes, then every 5 minutes for up to 24 hours. Whichever check sees the result first marks the payment `SUCCESS` (exactly once) and adds the time to the player's pass. Their open game unlocks instantly, and a player who approves after closing the page still gets the coffee.
+3. The game polls `/relworx/status` every 3 s (up to 90 s), and the **server also checks every pending payment with Relworx in the background**: every ~20 s for the first 15 minutes, then every 5 minutes for up to 24 hours. Whichever check sees the result first marks the payment `SUCCESS` (exactly once) and adds the time to the player's pass. Their open game unlocks instantly, and a player who approves after closing the page still gets the Rolex.
 4. Money lands in the shared Relworx float. There are **no payouts here**; cash-out happens in Jukila.
 
 Passes are tied to the player's anonymous browser ID. On a new phone or browser, **"Already bought one? Restore it"** copies an active pass across using the number they paid with.
@@ -140,10 +140,10 @@ Passes are tied to the player's anonymous browser ID. On a new phone or browser,
 1. **Persistent storage:** Coolify → DULU app → *Persistent Storage* → add a volume with destination path **`/data`**. Payments and passes live in `/data/dulu.db` (SQLite). Without the volume, every redeploy forgets who has paid.
 2. **Env vars:** add the variables above, then redeploy. The deploy log should show `payments: ON — 2000 UGX per Rolex = 24h online (players in Uganda)`.
 3. **Relworx dashboard: change nothing.** The account is shared with Jukila and has only one *Request payment webhook* slot, which must stay `https://api.jukila.elastictech.biz/billing/webhook`. DULU doesn't need it because it confirms payments itself (step 3 above). DULU's own `/relworx/webhook` endpoint stays available in case Jukila ever forwards `DULU-` references to it.
-4. **Test with a real coffee:** Play Online → buy 1 Rolex with your own number → approve → you should see "Thank you! 🌯" and start matchmaking. The deploy log shows `payment DULU-… SUCCESS +1 Rolex(es)`.
+4. **Test with a real Rolex:** Play Online → buy 1 Rolex with your own number → approve → you should see "Thank you! 🌯" and start matchmaking. The deploy log shows `payment DULU-… SUCCESS +1 Rolex(es)`.
 
 ### Endpoints
-- `POST /relworx/collect` with `{ phone, coffees | amountUgx, guestId }`: starts a collection. Rate-limited per IP and per phone number so nobody can spam prompts to a stranger's phone.
+- `POST /relworx/collect` with `{ phone, rolexes | amountUgx, guestId }`: starts a collection. Rate-limited per IP and per phone number so nobody can spam prompts to a stranger's phone.
 - `GET /relworx/status?reference=…`: the poll fallback.
 - `POST /relworx/webhook`: HMAC-SHA256 signed. Returns 401 on a bad signature and 200 otherwise, including unknown references. Not registered with Relworx (that slot belongs to Jukila); kept for optional forwarding.
 - `GET /api/coffee?guestId=…` and `POST /api/coffee/restore`: pass status and restore.
@@ -155,7 +155,7 @@ Passes are tied to the player's anonymous browser ID. On a new phone or browser,
 
 ```
 server/index.js           multiplayer server: matchmaking, rooms, turns, reconnects, static files
-server/payments.js        Relworx collections (collect / status / webhook), coffee passes
+server/payments.js        Relworx collections (collect / status / webhook), Rolex passes
 server/db.js              SQLite schema (payments, passes); built into Node 22, no extra dependency
 test/payments.test.js     payment tests (npm test)
 shared/arena.js           seeded arena generator shared by server + game (+ arena.d.ts types)

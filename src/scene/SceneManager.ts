@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 
-export const ARENA_RADIUS = 9;
+import { ARENA_RADIUS } from '../../shared/arena';
+export { ARENA_RADIUS };
 
 export class SceneManager {
   scene = new THREE.Scene();

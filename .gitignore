@@ -7,3 +7,5 @@ npm-debug.log*
 .env.local
 .vscode
 .idea
+# Vite temp files (left behind if a build is interrupted)
+*.timestamp-*.mjs

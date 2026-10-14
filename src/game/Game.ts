@@ -1,27 +1,73 @@
 import * as THREE from 'three';
 import { SceneManager, ARENA_RADIUS } from '../scene/SceneManager';
-import { Seed, SEED_RADIUS } from '../entities/Seed';
-import { Obstacle, ObstacleKind } from '../entities/Obstacle';
+import { Seed } from '../entities/Seed';
+import { Obstacle } from '../entities/Obstacle';
 import { FingerLauncher } from '../entities/FingerLauncher';
 import { PhysicsWorld, CollisionEvent } from '../physics/PhysicsWorld';
 import { DustSystem } from '../effects/Dust';
 import { AudioManager } from '../audio/AudioManager';
 import { UI, Player } from '../ui/UI';
+import {
+  generateArena, randomSeed, WIN_SCORE, MAX_LAUNCH_SPEED, type ArenaLayout,
+} from '../../shared/arena';
 
 type State =
   | 'MENU'
-  | 'SETUP'
-  | 'AIMING'
+  | 'AIMING'      // someone is lining up a shot (input only if it's your seed)
   | 'SHOOTING'
   | 'RESOLVING'
+  | 'WAITING'     // online: shot finished locally, waiting for the server's verdict
   | 'GAME_OVER';
 
-const WIN_SCORE = 25;
+export type Mode = 'local' | 'online';
+
+/** Online: what the game needs to tell the server. */
+export interface OnlineHooks {
+  aim(x: number, z: number, t: number): void;
+  launch(vx: number, vz: number): void;
+  shotResult(seeds: [number, number][], hits: number, bust: Player | null): void;
+}
+
+export interface MatchInfo {
+  you: Player;
+  names: [string, string];
+  layout: ArenaLayout;
+  scores: [number, number];
+  turn: Player;
+  seeds: [number, number][];
+  phase: 'aim' | 'shot' | 'over';
+  deadline: number; // ms remaining in this turn
+}
+
+export interface ServerState {
+  scores: [number, number];
+  turn: Player;
+  seeds: [number, number][];
+  deadline: number;
+  hits: number;
+  reason: 'shot' | 'timeout';
+}
+
+export interface ServerGameOver {
+  winner: Player;
+  reason: 'score' | 'bust' | 'left' | 'disconnect' | 'afk';
+  scores: [number, number];
+  seeds: [number, number][];
+}
+
+type Pending =
+  | { kind: 'state'; msg: ServerState }
+  | { kind: 'over'; msg: ServerGameOver };
+
 const MAX_PULL = 2.6;          // world-units pull distance = max power
-const MAX_LAUNCH_SPEED = 22;   // seed speed at max pull
 const AIM_START_RADIUS = 2.6;  // must start drag within this world radius of active seed
+const AIM_SEND_INTERVAL = 90;  // ms between aim updates sent to the opponent
+const TURN_WARN_SECONDS = 15;  // show countdown when this little time is left
 
 export class Game {
+  /** Fired when an ONLINE match ends (local games use the UI directly). */
+  onOnlineGameOver: (msg: ServerGameOver) => void = () => {};
+
   private scene: SceneManager;
   private phys = new PhysicsWorld();
   private dust = new DustSystem();
@@ -36,14 +82,26 @@ export class Game {
   private scores: [number, number] = [0, 0];
   private hitDuringShot = false;
   private clock = new THREE.Clock();
-  private lastGroundPoint: THREE.Vector3 | null = null;
   private pointerDown = false;
   private aimStart = new THREE.Vector3();
   private currentPull = new THREE.Vector3();
-  private lastPullT = 0;
   private slowMoUntil = 0;
   private rollTickAccum = 0;
   private ambientDustAccum = 0;
+
+  // ----- online -----
+  private mode: Mode = 'local';
+  private me: Player = 1;
+  private names: [string, string] = ['PLAYER 1', 'PLAYER 2'];
+  private hooks: OnlineHooks | null = null;
+  private shotHits = 0;
+  private turnDeadline = 0;      // performance.now() timestamp
+  private lastTurnLabel = '';
+  private lastAimSent = 0;
+  private pending: Pending[] = [];
+  private processingPending = false;
+  private waitingSince = 0;
+  private tween: { from: THREE.Vector3[]; to: THREE.Vector3[]; t: number; dur: number; done: () => void } | null = null;
 
   constructor(private canvas: HTMLCanvasElement, ui: UI) {
     this.ui = ui;
@@ -53,6 +111,33 @@ export class Game {
 
     this.phys.onCollision = (e) => this.handleCollision(e);
     this.setupInput();
+
+    // Browsers pause animation in background tabs. If the shooter switches to
+    // another app mid-shot, finish the shot instantly so the result still
+    // reaches the opponent.
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.fastForwardShot();
+    });
+  }
+
+  private fastForwarding = false;
+
+  private fastForwardShot() {
+    if (this.state !== 'SHOOTING' && this.state !== 'RESOLVING') return;
+    if (this.mode === 'online' && !this.isMyTurn()) return; // spectators catch up via the server
+    this.fastForwarding = true;
+    try {
+      for (let i = 0; i < 60 * 30 && !this.phys.allSeedsResting(); i++) {
+        this.phys.step(1 / 60);
+        if (this.state !== 'SHOOTING' && this.state !== 'RESOLVING') break; // e.g. bust
+      }
+    } finally {
+      this.fastForwarding = false;
+    }
+    if (this.state !== 'SHOOTING' && this.state !== 'RESOLVING') return;
+    this.seeds?.forEach((s) => { s.vel.set(0, 0, 0); s.syncMesh(); });
+    this.state = 'RESOLVING';
+    this.finalizeTurnSoon();
   }
 
   async init() {
@@ -64,92 +149,138 @@ export class Game {
 
   setSoundEnabled(v: boolean) { this.audio.setEnabled(v); }
 
+  get isOnline() { return this.mode === 'online'; }
+
+  // ---------- Starting / stopping ----------
+
+  /** Local hot-seat game on one device. */
   startNewGame() {
-    // Reset
+    this.mode = 'local';
+    this.hooks = null;
+    this.names = ['PLAYER 1', 'PLAYER 2'];
+    this.ui.setNames('PLAYER 1', 'PLAYER 2');
+    this.resetCommon();
+    this.buildArena(generateArena(randomSeed()));
+    this.beginTurn(1);
+  }
+
+  /** Start (or resume after reconnect) an online match from the server. */
+  startOnline(m: MatchInfo, hooks: OnlineHooks) {
+    this.mode = 'online';
+    this.hooks = hooks;
+    this.me = m.you;
+    this.names = m.names;
+    const label = (p: Player) => (p === m.you ? `${m.names[p - 1]} (YOU)` : m.names[p - 1]).toUpperCase();
+    this.ui.setNames(label(1), label(2));
+    this.resetCommon();
+    this.buildArena(m.layout, m.seeds);
+    this.scores = [m.scores[0], m.scores[1]];
+    this.ui.setScore(this.scores[0], this.scores[1]);
+    this.setDeadline(m.deadline);
+
+    if (m.phase === 'shot') {
+      // Rejoined mid-shot: wait for the result, then carry on.
+      this.currentPlayer = m.turn;
+      this.ui.setActivePlayer(m.turn, this.turnLabel());
+      this.ui.setHint('SYNCING…');
+      this.finger.hide();
+      this.state = 'WAITING';
+      this.waitingSince = performance.now();
+      this.frameBothSeeds();
+    } else {
+      this.beginTurn(m.turn);
+    }
+  }
+
+  /** Back to the menu: freeze the arena, drop pending network events. */
+  stop() {
+    this.state = 'MENU';
+    this.pending = [];
+    this.processingPending = false;
+    this.tween = null;
+    this.pointerDown = false;
+    this.finger.hide();
+  }
+
+  private resetCommon() {
     this.scores = [0, 0];
     this.hitDuringShot = false;
-    this.currentPlayer = 1;
+    this.shotHits = 0;
+    this.pending = [];
+    this.processingPending = false;
+    this.tween = null;
+    this.pointerDown = false;
+    this.turnDeadline = 0;
+    this.lastTurnLabel = '';
     this.ui.setScore(0, 0);
+  }
 
+  private buildArena(layout: ArenaLayout, seedPositions?: [number, number][]) {
     // Clear existing seeds/obstacles from scene
     if (this.seeds) {
       this.scene.remove(this.seeds[0].mesh);
       this.scene.remove(this.seeds[1].mesh);
     }
-    for (const o of this.obstacles) this.scene.remove(o.mesh);
+    // Obstacles live inside the ground group, so remove them from their parent.
+    for (const o of this.obstacles) o.mesh.removeFromParent();
     this.obstacles.length = 0;
     this.phys.clearObstacles();
     this.phys.seeds.length = 0;
 
-    // Create seeds at opposite ends
-    const angle = Math.random() * Math.PI * 2;
-    const dist = ARENA_RADIUS - 1.6;
     const s1 = new Seed(1);
     const s2 = new Seed(2);
-    s1.setPosition(Math.cos(angle) * dist, Math.sin(angle) * dist);
-    s2.setPosition(Math.cos(angle + Math.PI) * dist, Math.sin(angle + Math.PI) * dist);
+    const p1 = seedPositions?.[0] ?? [layout.seeds[0].x, layout.seeds[0].z];
+    const p2 = seedPositions?.[1] ?? [layout.seeds[1].x, layout.seeds[1].z];
+    s1.setPosition(p1[0], p1[1]);
+    s2.setPosition(p2[0], p2[1]);
     this.scene.add(s1.mesh);
     this.scene.add(s2.mesh);
     this.phys.addSeed(s1);
     this.phys.addSeed(s2);
     this.seeds = [s1, s2];
 
-    // Generate obstacles between seeds, ensuring clear paths
-    this.generateObstacles();
-
-    this.beginTurn(1);
+    for (const spec of layout.obstacles) {
+      const obs = new Obstacle(spec);
+      this.obstacles.push(obs);
+      this.phys.addObstacle(obs);
+      this.scene.addObstacle(obs.mesh);
+    }
   }
 
-  private generateObstacles() {
-    if (!this.seeds) return;
-    const rng = mulberry32(Math.floor(Math.random() * 1e9));
-    const seed1 = this.seeds[0].pos.clone();
-    const seed2 = this.seeds[1].pos.clone();
+  // ---------- Turns ----------
 
-    const kinds: { kind: ObstacleKind; count: number }[] = [
-      { kind: 'rock', count: 3 + Math.floor(rng() * 3) },
-      { kind: 'pebble', count: 6 + Math.floor(rng() * 4) },
-      { kind: 'stick', count: 2 + Math.floor(rng() * 2) },
-      { kind: 'bump', count: 2 + Math.floor(rng() * 2) },
-    ];
+  /** Does the person at this screen control the current shot? */
+  private isMyTurn() {
+    return this.mode === 'local' || this.currentPlayer === this.me;
+  }
 
-    for (const { kind, count } of kinds) {
-      for (let i = 0; i < count; i++) {
-        for (let attempt = 0; attempt < 30; attempt++) {
-          const a = rng() * Math.PI * 2;
-          const r = rng() * (ARENA_RADIUS - 1.2);
-          const x = Math.cos(a) * r;
-          const z = Math.sin(a) * r;
-          const candidate = new THREE.Vector3(x, 0, z);
-          // keep clear zone around each seed
-          if (candidate.distanceTo(seed1) < 1.6) continue;
-          if (candidate.distanceTo(seed2) < 1.6) continue;
-          // avoid clustering
-          let bad = false;
-          for (const o of this.obstacles) {
-            if (candidate.distanceTo(o.pos) < 0.55 + o.radius) { bad = true; break; }
-          }
-          if (bad) continue;
-          // avoid blocking direct line between seeds too tightly (leave a lane on at least one side)
-          const distToLine = pointToSegmentDist(candidate, seed1, seed2);
-          if (distToLine < 0.35 && kind === 'rock') continue;
-
-          const obs = new Obstacle(kind, x, z, rng);
-          this.obstacles.push(obs);
-          this.phys.addObstacle(obs);
-          this.scene.addObstacle(obs.mesh);
-          break;
-        }
-      }
+  private turnLabel(): string {
+    const p = this.currentPlayer;
+    if (this.mode === 'local') return `PLAYER ${p}'S TURN`;
+    let label = p === this.me ? 'YOUR TURN' : `${this.names[p - 1].toUpperCase()}'S TURN`;
+    if (this.state === 'AIMING' && this.turnDeadline > 0) {
+      const secs = Math.max(0, Math.ceil((this.turnDeadline - performance.now()) / 1000));
+      if (secs <= TURN_WARN_SECONDS) label += ` · ${secs}s`;
     }
+    return label;
+  }
+
+  private setDeadline(msRemaining: number) {
+    this.turnDeadline = msRemaining > 0 ? performance.now() + msRemaining : 0;
   }
 
   private beginTurn(player: Player) {
     this.currentPlayer = player;
     this.hitDuringShot = false;
+    this.shotHits = 0;
     this.state = 'AIMING';
-    this.ui.setActivePlayer(player);
-    this.ui.setHint('PULL BACK • RELEASE');
+    this.lastTurnLabel = '';
+    this.ui.setActivePlayer(player, this.turnLabel());
+    if (this.isMyTurn()) {
+      this.ui.setHint('PULL BACK • RELEASE');
+    } else {
+      this.ui.setHint(`WAITING FOR ${this.names[player - 1].toUpperCase()}…`);
+    }
     if (this.seeds) {
       this.finger.show(this.seeds[player - 1]);
       this.updateAimingCamera();
@@ -173,7 +304,17 @@ export class Game {
     this.scene.setCameraTargets(focus, zoom);
   }
 
-  private endTurn() {
+  private frameBothSeeds() {
+    if (!this.seeds) return;
+    const active = this.seeds[this.currentPlayer - 1];
+    const other = this.seeds[this.currentPlayer === 1 ? 1 : 0];
+    const focus = active.pos.clone().add(other.pos).multiplyScalar(0.5);
+    const separation = active.pos.distanceTo(other.pos);
+    const zoom = Math.max(1, (separation + 4) / 9);
+    this.scene.setCameraTargets(focus, zoom);
+  }
+
+  private endTurnLocal() {
     // If we scored a hit, same player shoots again. Otherwise switch.
     if (this.hitDuringShot) {
       this.beginTurn(this.currentPlayer);
@@ -198,7 +339,7 @@ export class Game {
   }
 
   private onPointerDown(e: PointerEvent) {
-    if (this.state !== 'AIMING' || !this.seeds) return;
+    if (this.state !== 'AIMING' || !this.seeds || !this.isMyTurn()) return;
     const gp = this.pointerGround(e);
     if (!gp) return;
     const seed = this.seeds[this.currentPlayer - 1];
@@ -212,7 +353,7 @@ export class Game {
   }
 
   private onPointerMove(e: PointerEvent) {
-    if (!this.pointerDown || this.state !== 'AIMING' || !this.seeds) return;
+    if (!this.pointerDown || this.state !== 'AIMING' || !this.seeds || !this.isMyTurn()) return;
     const gp = this.pointerGround(e);
     if (!gp) return;
     // pull vector = start - current (drag backward from seed direction)
@@ -220,7 +361,6 @@ export class Game {
     this.currentPull.y = 0;
     const pullMag = Math.min(MAX_PULL, this.currentPull.length());
     const pullT = pullMag / MAX_PULL;
-    this.lastPullT = pullT;
     // Aim direction = OPPOSITE of drag (finger snaps forward when released)
     const aimDir = this.currentPull.clone();
     if (aimDir.lengthSq() < 1e-6) {
@@ -229,24 +369,41 @@ export class Game {
     }
     aimDir.normalize();
     this.finger.setAim(aimDir, pullT);
+
+    // Let the opponent watch the finger pull back
+    if (this.hooks && performance.now() - this.lastAimSent > AIM_SEND_INTERVAL) {
+      this.lastAimSent = performance.now();
+      this.hooks.aim(aimDir.x, aimDir.z, pullT);
+    }
   }
 
   private onPointerUp(e: PointerEvent) {
     if (!this.pointerDown || !this.seeds) { this.pointerDown = false; return; }
     this.pointerDown = false;
-    if (this.state !== 'AIMING') return;
+    if (this.state !== 'AIMING' || !this.isMyTurn()) return;
 
     const pullLen = this.currentPull.length();
     if (pullLen < 0.15) {
       // too weak — cancel
       this.finger.resetPull();
+      this.hooks?.aim(0, 1, 0);
       return;
     }
     const pullT = Math.min(1, pullLen / MAX_PULL);
     const speed = pullT * MAX_LAUNCH_SPEED;
     const dir = this.currentPull.clone().normalize();
+    const vx = dir.x * speed;
+    const vz = dir.z * speed;
+    this.hooks?.launch(vx, vz);
+    this.launch(vx, vz);
+  }
+
+  /** Fire the current player's seed (used for both your shots and the opponent's). */
+  private launch(vx: number, vz: number) {
+    if (!this.seeds) return;
     const seed = this.seeds[this.currentPlayer - 1];
-    seed.vel.set(dir.x * speed, 0, dir.z * speed);
+    const pullT = Math.min(1, Math.hypot(vx, vz) / MAX_LAUNCH_SPEED);
+    seed.vel.set(vx, 0, vz);
 
     // audio + dust burst at launch
     this.audio.launch();
@@ -255,15 +412,118 @@ export class Game {
 
     this.finger.snap();
     // Let the flick animation play before hiding the hand
-    window.setTimeout(() => this.finger.hide(), 220);
+    window.setTimeout(() => { if (this.state !== 'AIMING') this.finger.hide(); }, 220);
 
+    this.hitDuringShot = false;
+    this.shotHits = 0;
+    this.waitingSince = performance.now();
     this.state = 'SHOOTING';
+    this.ui.setActivePlayer(this.currentPlayer, this.turnLabel());
     this.ui.setHint('BLASTING…');
+  }
+
+  // ---------- Network events (online) ----------
+
+  remoteAim(x: number, z: number, t: number) {
+    if (this.mode !== 'online' || this.state !== 'AIMING' || this.isMyTurn()) return;
+    const dir = new THREE.Vector3(x, 0, z);
+    if (dir.lengthSq() < 1e-6) return;
+    if (t <= 0) this.finger.resetPull();
+    else this.finger.setAim(dir, t);
+  }
+
+  remoteLaunch(vx: number, vz: number) {
+    if (this.mode !== 'online' || this.state !== 'AIMING' || this.isMyTurn()) return;
+    this.launch(vx, vz);
+  }
+
+  applyServerState(msg: ServerState) {
+    if (this.mode !== 'online') return;
+    this.pending.push({ kind: 'state', msg });
+    this.flushPending();
+  }
+
+  applyGameOver(msg: ServerGameOver) {
+    if (this.mode !== 'online') return;
+    this.pending.push({ kind: 'over', msg });
+    this.flushPending();
+  }
+
+  /**
+   * Apply server verdicts in order. If we're still animating the opponent's
+   * shot locally, wait for it to settle (or give up after a few seconds) so
+   * the replay isn't cut short.
+   */
+  private flushPending(force = false) {
+    if (this.processingPending || this.pending.length === 0) return;
+    const simRunning = this.state === 'SHOOTING' || this.state === 'RESOLVING';
+    if (simRunning && !force) return;
+
+    const item = this.pending.shift()!;
+    this.processingPending = true;
+    this.pointerDown = false;
+
+    const next = () => {
+      this.processingPending = false;
+      this.flushPending();
+    };
+
+    if (item.kind === 'state') {
+      const m = item.msg;
+      if (m.reason === 'timeout' && this.state === 'AIMING') {
+        this.finger.resetPull();
+        if (this.currentPlayer === this.me) this.ui.flashBlast('TIME UP');
+      }
+      this.state = 'WAITING';
+      this.settleSeeds(m.seeds, () => {
+        this.scores = [m.scores[0], m.scores[1]];
+        this.ui.setScore(this.scores[0], this.scores[1]);
+        this.setDeadline(m.deadline);
+        this.beginTurn(m.turn);
+        next();
+      });
+    } else {
+      const m = item.msg;
+      this.state = 'GAME_OVER';
+      this.finger.hide();
+      this.settleSeeds(m.seeds, () => {
+        this.scores = [m.scores[0], m.scores[1]];
+        this.ui.setScore(this.scores[0], this.scores[1]);
+        if (m.reason === 'bust') {
+          this.audio.gameOverBust();
+          this.scene.shake(0.6);
+        } else if (m.winner === this.me) {
+          this.audio.victory();
+        }
+        this.pending = [];
+        this.processingPending = false;
+        window.setTimeout(() => this.onOnlineGameOver(m), m.reason === 'bust' ? 500 : 250);
+      });
+    }
+  }
+
+  /** Glide seeds to the authoritative positions (instant if already there). */
+  private settleSeeds(target: [number, number][], done: () => void) {
+    if (!this.seeds || !target || target.length !== 2) { done(); return; }
+    const to = target.map(([x, z]) => new THREE.Vector3(x, this.seeds![0].radius, z));
+    const from = this.seeds.map((s) => s.pos.clone());
+    for (const s of this.seeds) s.vel.set(0, 0, 0);
+    const maxErr = Math.max(from[0].distanceTo(to[0]), from[1].distanceTo(to[1]));
+    if (maxErr < 0.01) {
+      this.seeds.forEach((s, i) => { s.pos.copy(to[i]); s.syncMesh(); });
+      done();
+      return;
+    }
+    this.tween = { from, to, t: 0, dur: Math.min(0.45, 0.15 + maxErr * 0.1), done };
   }
 
   // ---------- Collision handling ----------
 
   private handleCollision(e: CollisionEvent) {
+    // Only the shooter's screen decides scoring and busts; the other screen
+    // just shows the effects and gets the verdict from the server.
+    const authority = this.isMyTurn();
+
     if (e.type === 'seed-seed') {
       // Attacking seed is the current player's
       if (!this.seeds) return;
@@ -272,9 +532,13 @@ export class Game {
       // Only count as hit if attacker was actually moving significantly
       const attackerSpeed = Math.hypot(attacker.vel.x, attacker.vel.z) + Math.hypot(other.vel.x, other.vel.z);
       if (attackerSpeed > 0.4) {
-        this.hitDuringShot = true;
-        this.scores[this.currentPlayer - 1]++;
-        this.ui.setScore(this.scores[0], this.scores[1]);
+        if (authority) {
+          this.hitDuringShot = true;
+          this.shotHits++;
+          this.scores[this.currentPlayer - 1]++;
+          this.ui.setScore(this.scores[0], this.scores[1]);
+        }
+        if (this.fastForwarding) return;
         this.ui.flashBlast('BLAST! +1');
         this.audio.seedHitSeed();
         this.audio.score();
@@ -283,6 +547,11 @@ export class Game {
         this.slowMoUntil = performance.now() + 100;
       }
     } else if (e.type === 'seed-obstacle') {
+      if (authority && e.obstacle && e.obstacle.significant && e.impactSpeed > 10.5 && this.fastForwarding && Math.random() < 0.06) {
+        this.triggerBlastedIntoObstacle(e.a.playerId);
+        return;
+      }
+      if (this.fastForwarding) return;
       const power = Math.min(1, e.impactSpeed / 12);
       this.audio.seedHitObstacle();
       this.dust.burst(e.point.x, e.point.z, Math.floor(8 + power * 14), 0.5 + power * 0.8);
@@ -290,10 +559,11 @@ export class Game {
 
       // Rare "blasted into obstacle" — big rock, high impact.
       // The seed that CRASHED into the rock loses (its player is the loser).
-      if (e.obstacle && e.obstacle.significant && e.impactSpeed > 10.5 && Math.random() < 0.06) {
+      if (authority && e.obstacle && e.obstacle.significant && e.impactSpeed > 10.5 && Math.random() < 0.06) {
         this.triggerBlastedIntoObstacle(e.a.playerId);
       }
     } else if (e.type === 'seed-wall') {
+      if (this.fastForwarding) return;
       const power = Math.min(1, e.impactSpeed / 12);
       this.audio.seedHitObstacle();
       this.dust.burst(e.point.x, e.point.z, Math.floor(4 + power * 8), 0.3 + power * 0.5);
@@ -302,7 +572,14 @@ export class Game {
   }
 
   private triggerBlastedIntoObstacle(loser: Player) {
-    if (this.state === 'GAME_OVER') return;
+    if (this.state === 'GAME_OVER' || this.state === 'WAITING') return;
+    if (this.mode === 'online') {
+      // Report now; the server ends the game for both players.
+      this.state = 'WAITING';
+      this.waitingSince = performance.now();
+      this.hooks?.shotResult(this.seedPositions(), this.shotHits, loser);
+      return;
+    }
     this.state = 'GAME_OVER';
     this.audio.gameOverBust();
     this.scene.shake(0.6);
@@ -310,6 +587,32 @@ export class Game {
     setTimeout(() => {
       this.ui.showGameOver(winner, this.scores[0], this.scores[1], 'BLASTED INTO THE OBSTACLE!');
     }, 500);
+  }
+
+  private seedPositions(): [number, number][] {
+    if (!this.seeds) return [];
+    return this.seeds.map((s) => [round4(s.pos.x), round4(s.pos.z)] as [number, number]);
+  }
+
+  // ---------- Test hook (only exposed with ?debug) ----------
+
+  /** Snapshot used by automated tests; also handy in the browser console. */
+  debugInfo() {
+    const project = (x: number, z: number) => {
+      const v = new THREE.Vector3(x, 0, z).project(this.scene.camera);
+      const r = this.canvas.getBoundingClientRect();
+      return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height];
+    };
+    return {
+      state: this.state,
+      mode: this.mode,
+      me: this.me,
+      currentPlayer: this.currentPlayer,
+      scores: [...this.scores],
+      seeds: this.seedPositions(),
+      obstacles: this.obstacles.map((o) => [round4(o.pos.x), round4(o.pos.z), o.kind]),
+      project: (x: number, z: number) => project(x, z),
+    };
   }
 
   // ---------- Loop ----------
@@ -320,6 +623,14 @@ export class Game {
       const slow = performance.now() < this.slowMoUntil;
       const dt = slow ? rawDt * 0.35 : rawDt;
 
+      if (this.tween && this.seeds) {
+        const tw = this.tween;
+        tw.t = Math.min(1, tw.t + rawDt / tw.dur);
+        const k = 1 - (1 - tw.t) * (1 - tw.t);
+        this.seeds.forEach((s, i) => { s.pos.lerpVectors(tw.from[i], tw.to[i], k); s.syncMesh(); });
+        if (tw.t >= 1) { this.tween = null; tw.done(); }
+      }
+
       if (this.state === 'SHOOTING' || this.state === 'RESOLVING') {
         this.phys.step(dt);
         if (this.seeds) {
@@ -328,7 +639,6 @@ export class Game {
             // dust trail for fast rolling
             const spd = Math.hypot(s.vel.x, s.vel.z);
             this.dust.trail(s.pos.x, s.pos.z, Math.min(1, spd / 8));
-            // roll audio ticks
           }
           // aggregate rolling ticks
           const aggSpd = (Math.hypot(this.seeds[0].vel.x, this.seeds[0].vel.z) +
@@ -339,12 +649,7 @@ export class Game {
             this.rollTickAccum = 0;
           }
           // Frame both seeds always — fit-based zoom
-          const active = this.seeds[this.currentPlayer - 1];
-          const other = this.seeds[this.currentPlayer === 1 ? 1 : 0];
-          const focus = active.pos.clone().add(other.pos).multiplyScalar(0.5);
-          const separation = active.pos.distanceTo(other.pos);
-          const zoom = Math.max(1, (separation + 4) / 9);
-          this.scene.setCameraTargets(focus, zoom);
+          this.frameBothSeeds();
         }
 
         // Check if all resting
@@ -355,7 +660,24 @@ export class Game {
         }
       } else if (this.state === 'AIMING' && this.seeds) {
         // idle: seeds shouldn't move, but keep meshes synced
-        for (const s of this.seeds) s.syncMesh();
+        if (!this.tween) for (const s of this.seeds) s.syncMesh();
+        if (this.mode === 'online') {
+          const label = this.turnLabel();
+          if (label !== this.lastTurnLabel) {
+            this.lastTurnLabel = label;
+            this.ui.setActivePlayer(this.currentPlayer, label);
+          }
+        }
+      } else if (this.state === 'WAITING') {
+        // Safety net: if the opponent's replay never settles, apply anyway.
+        if (this.pending.length && !this.processingPending) this.flushPending(true);
+      }
+
+      // If a verdict arrived while the local replay was still rolling,
+      // and the replay is taking unusually long, apply it anyway.
+      if ((this.state === 'SHOOTING' || this.state === 'RESOLVING') && this.pending.length &&
+          !this.processingPending && performance.now() - this.waitingSince > 6000) {
+        this.flushPending(true);
       }
 
       // Ambient dust drifting through the arena
@@ -382,6 +704,20 @@ export class Game {
     window.setTimeout(() => {
       this.finalizeScheduled = false;
       if (this.state !== 'RESOLVING') return;
+
+      if (this.mode === 'online') {
+        this.state = 'WAITING';
+        this.waitingSince = performance.now();
+        if (this.isMyTurn()) {
+          // We were the shooter: report where everything stopped.
+          this.hooks?.shotResult(this.seedPositions(), this.shotHits, null);
+        } else {
+          this.ui.setHint('…');
+        }
+        this.flushPending();
+        return;
+      }
+
       // check victory
       if (this.scores[0] >= WIN_SCORE) {
         this.state = 'GAME_OVER';
@@ -395,25 +731,11 @@ export class Game {
         this.ui.showGameOver(2, this.scores[0], this.scores[1]);
         return;
       }
-      this.endTurn();
+      this.endTurnLocal();
     }, 400);
   }
 }
 
-function pointToSegmentDist(p: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3): number {
-  const ab = new THREE.Vector3().subVectors(b, a);
-  const ap = new THREE.Vector3().subVectors(p, a);
-  const t = Math.max(0, Math.min(1, ap.dot(ab) / ab.lengthSq()));
-  const proj = a.clone().addScaledVector(ab, t);
-  return proj.distanceTo(p);
-}
-
-function mulberry32(seed: number) {
-  let a = seed >>> 0;
-  return function () {
-    a |= 0; a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+function round4(n: number) {
+  return Math.round(n * 10000) / 10000;
 }

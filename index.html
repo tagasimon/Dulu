@@ -14,12 +14,12 @@
       <div id="hud" class="hidden">
         <div id="score-bar">
           <div class="score-side" id="p1-side">
-            <div class="score-label">PLAYER 1</div>
+            <div class="score-label" id="p1-label">PLAYER 1</div>
             <div class="score-value" id="p1-score">0</div>
           </div>
           <div id="title-mini">DULU</div>
           <div class="score-side" id="p2-side">
-            <div class="score-label">PLAYER 2</div>
+            <div class="score-label" id="p2-label">PLAYER 2</div>
             <div class="score-value" id="p2-score">0</div>
           </div>
         </div>
@@ -27,17 +27,55 @@
         <div id="hint-text">PULL BACK • RELEASE</div>
         <div id="blast-flash"></div>
         <button id="sound-toggle" title="Toggle sound">🔊</button>
+        <button id="btn-leave" title="Back to menu">✕</button>
+        <div id="net-banner" class="hidden"></div>
       </div>
 
       <div id="menu">
         <h1 class="title">DULU</h1>
         <div class="subtitle">THE BLASTING GAME</div>
         <div class="tagline">A childhood game from Uganda.</div>
+        <label class="name-field">
+          <span>YOUR NAME</span>
+          <input id="name-input" type="text" maxlength="16" autocomplete="nickname" enterkeyhint="done" spellcheck="false" />
+        </label>
         <div class="menu-buttons">
-          <button id="btn-play" class="btn-primary">PLAY DULU</button>
-          <button id="btn-how" class="btn-secondary">HOW TO PLAY</button>
+          <button id="btn-online" class="btn-primary">PLAY ONLINE</button>
+          <button id="btn-friend" class="btn-secondary">PLAY A FRIEND</button>
+          <button id="btn-play" class="btn-secondary">SAME DEVICE</button>
+          <button id="btn-how" class="btn-text">HOW TO PLAY</button>
         </div>
-        <div class="footer-note">Local 2-player • First to 25 wins</div>
+        <div class="footer-note"><span id="online-count"></span>First to 25 wins</div>
+      </div>
+
+      <div id="lobby" class="hidden">
+        <div class="lobby-card">
+          <h2 id="lobby-title">FINDING AN OPPONENT</h2>
+          <div id="lobby-spinner" class="seed-spinner"><i></i><i></i></div>
+          <p id="lobby-text"></p>
+
+          <div id="lobby-friend" class="hidden">
+            <button id="btn-create-room" class="btn-primary">CREATE A ROOM</button>
+            <div class="or-line"><span>or join a friend's room</span></div>
+            <form id="join-form" class="join-row">
+              <input id="code-input" type="text" maxlength="4" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+              <button type="submit" id="btn-join" class="btn-secondary">JOIN</button>
+            </form>
+          </div>
+
+          <div id="lobby-room" class="hidden">
+            <div class="room-code-label">ROOM CODE</div>
+            <div id="room-code" class="room-code"></div>
+            <div class="share-row">
+              <button id="btn-share" class="btn-primary">SHARE LINK</button>
+              <button id="btn-whatsapp" class="btn-secondary">WHATSAPP</button>
+            </div>
+            <div id="share-feedback" class="share-feedback"></div>
+          </div>
+
+          <div id="lobby-error" class="lobby-error hidden"></div>
+          <button id="btn-lobby-cancel" class="btn-text">CANCEL</button>
+        </div>
       </div>
 
       <div id="tutorial" class="hidden">
@@ -51,6 +89,7 @@
             <li><b>Keep blasting</b> — on a hit you shoot again.</li>
             <li><b>Miss</b> — turn passes to the other player.</li>
             <li><b>First to 25</b> hits wins.</li>
+            <li><b>Online</b> — no sign-up. Tap <i>Play Online</i> to meet a random player, or <i>Play a Friend</i> to send a room link.</li>
           </ol>
           <button id="btn-close-tut" class="btn-primary">GOT IT</button>
         </div>
@@ -60,7 +99,10 @@
         <div class="go-card">
           <div id="go-title">PLAYER 1 WINS!</div>
           <div id="go-subtitle">25 — 12</div>
+          <div id="go-note" class="go-note"></div>
           <button id="btn-restart" class="btn-primary">PLAY AGAIN</button>
+          <button id="btn-new-opponent" class="btn-secondary hidden">NEW OPPONENT</button>
+          <button id="btn-go-menu" class="btn-text">MENU</button>
         </div>
       </div>
 

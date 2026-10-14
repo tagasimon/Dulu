@@ -1,0 +1,49 @@
+name: Docker build check
+
+# Builds the same image Coolify builds, starts it, and checks the game page,
+# the health endpoint and the multiplayer WebSocket all respond.
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t dulu .
+
+      - name: Start container
+        run: docker run -d --name dulu -p 8080:80 dulu
+
+      - name: Wait for health
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8080/healthz && exit 0
+            sleep 1
+          done
+          docker logs dulu
+          exit 1
+
+      - name: Check game page and room links
+        run: |
+          curl -fsS http://localhost:8080/ | grep -q '<title>DULU'
+          curl -fsS http://localhost:8080/r/ABCD | grep -q '<title>DULU'
+
+      - name: Check WebSocket handshake
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
+            -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+            -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+            http://localhost:8080/ws || true)
+          echo "status $code"
+          test "$code" = "101"
+
+      - name: Docker health status
+        run: |
+          sleep 2
+          docker inspect --format '{{.State.Health.Status}}' dulu
+          docker logs dulu

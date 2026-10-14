@@ -1,6 +1,7 @@
 import * as THREE from 'three';
+import { mulberry32, type ObstacleSpec, type ObstacleKind } from '../../shared/arena';
 
-export type ObstacleKind = 'rock' | 'pebble' | 'stick' | 'bump';
+export type { ObstacleKind };
 
 export class Obstacle {
   mesh: THREE.Object3D;
@@ -11,12 +12,19 @@ export class Obstacle {
   restitution: number;
   significant: boolean; // large enough to cause "blasted into obstacle" end
 
-  constructor(kind: ObstacleKind, x: number, z: number, rng: () => number) {
+  /**
+   * Built from a layout spec (see shared/arena.js). Position, kind and collision
+   * radius come from the spec so every player gets identical physics; the
+   * visual shape is seeded from spec.shapeSeed.
+   */
+  constructor(spec: ObstacleSpec) {
+    const { kind, x, z } = spec;
+    const rng = mulberry32(spec.shapeSeed);
     this.kind = kind;
     this.pos.set(x, 0, z);
 
     if (kind === 'rock') {
-      this.radius = 0.4 + rng() * 0.25;
+      this.radius = spec.radius;
       this.height = this.radius * 1.1;
       this.restitution = 0.55;
       this.significant = true;
@@ -30,7 +38,7 @@ export class Obstacle {
       mesh.receiveShadow = true;
       this.mesh = mesh;
     } else if (kind === 'pebble') {
-      this.radius = 0.18 + rng() * 0.1;
+      this.radius = spec.radius;
       this.height = this.radius * 0.9;
       this.restitution = 0.4;
       this.significant = false;
@@ -44,11 +52,10 @@ export class Obstacle {
       mesh.receiveShadow = true;
       this.mesh = mesh;
     } else if (kind === 'stick') {
-      this.radius = 0.14;
       this.height = 0.14;
       this.restitution = 0.3;
       this.significant = false;
-      const len = 0.6 + rng() * 0.7;
+      const len = spec.len;
       const group = new THREE.Group();
       const g = new THREE.CylinderGeometry(0.05, 0.06, len, 8);
       const m = new THREE.MeshStandardMaterial({ color: 0x3a2110, roughness: 1 });
@@ -60,11 +67,11 @@ export class Obstacle {
       group.position.set(x, 0.06, z);
       group.rotation.y = rng() * Math.PI;
       this.mesh = group;
-      // Longer collision radius approximation
-      this.radius = Math.max(0.16, len * 0.3);
+      // Longer collision radius approximation (computed in shared/arena.js)
+      this.radius = spec.radius;
     } else {
       // bump — visual only, but still small collision
-      this.radius = 0.35;
+      this.radius = spec.radius;
       this.height = 0.05;
       this.restitution = 0.2;
       this.significant = false;

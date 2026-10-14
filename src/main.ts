@@ -1,25 +1,332 @@
 import './style.css';
-import { Game } from './game/Game';
-import { UI } from './ui/UI';
+import { Game, type MatchInfo, type ServerGameOver } from './game/Game';
+import { UI, type Player } from './ui/UI';
+import { Net } from './net/Net';
+import { identity } from './net/identity';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 const ui = new UI();
 const game = new Game(canvas, ui);
+const net = new Net(Net.defaultUrl(), () => ({ guestId: identity.guestId, name: identity.displayName }));
+
+// What the player is currently doing, so reconnects can pick up where they were.
+type Phase =
+  | { kind: 'menu' }
+  | { kind: 'local' }
+  | { kind: 'searching' }
+  | { kind: 'friend' }
+  | { kind: 'hosting'; code: string }
+  | { kind: 'joining'; code: string }
+  | { kind: 'online'; you: Player; names: [string, string]; over: boolean; rematchAsked: boolean; opponentGone: boolean };
+
+let phase: Phase = { kind: 'menu' };
+let slowSearchTimer: number | null = null;
+let awayTimer: number | null = null;
+
+// ---------- menu ----------
+
+ui.setNameValue(identity.name, identity.displayName);
+ui.onNameChange = (name) => {
+  identity.setName(name);
+  ui.setNameValue(identity.name, identity.displayName);
+  if (net.ready) net.send({ type: 'setName', name: identity.displayName });
+};
 
 ui.onPlay = () => {
-  ui.showHUD();
+  phase = { kind: 'local' };
+  ui.showHUD(false);
   game.startNewGame();
+};
+
+ui.onPlayOnline = () => startSearching();
+ui.onPlayFriend = () => {
+  phase = { kind: 'friend' };
+  ui.showLobby({ kind: 'friend' });
+  net.connect();
+};
+
+ui.onSoundToggle = (enabled) => game.setSoundEnabled(enabled);
+
+// ---------- lobby ----------
+
+function startSearching() {
+  phase = { kind: 'searching' };
+  ui.showLobby(net.ready ? { kind: 'searching' } : { kind: 'connecting' });
+  net.send({ type: 'queue' });
+  clearSlowTimer();
+  slowSearchTimer = window.setTimeout(() => {
+    if (phase.kind === 'searching') ui.showLobby({ kind: 'searching', slow: true });
+  }, 20_000);
+}
+
+function clearSlowTimer() {
+  if (slowSearchTimer !== null) { clearTimeout(slowSearchTimer); slowSearchTimer = null; }
+}
+
+ui.onCreateRoom = () => {
+  ui.showLobby({ kind: 'connecting' });
+  net.send({ type: 'createRoom' });
+};
+
+ui.onJoinRoom = (code) => joinRoom(code);
+
+function joinRoom(code: string) {
+  phase = { kind: 'joining', code };
+  ui.showLobby({ kind: 'joining', code });
+  net.send({ type: 'joinRoom', code });
+}
+
+function shareUrl(code: string) {
+  return `${location.origin}/r/${code}`;
+}
+
+function shareText(code: string) {
+  return `Play DULU with me — the seed-blasting game! Tap to join my room (${code}): ${shareUrl(code)}`;
+}
+
+ui.onShare = async () => {
+  if (phase.kind !== 'hosting') return;
+  const url = shareUrl(phase.code);
+  const text = shareText(phase.code);
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'DULU', text, url });
+      return;
+    }
+  } catch (e) {
+    if ((e as DOMException)?.name === 'AbortError') return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    ui.setShareFeedback('Link copied — paste it to your friend.');
+  } catch {
+    ui.setShareFeedback(url);
+  }
+};
+
+ui.onWhatsApp = () => {
+  if (phase.kind !== 'hosting') return;
+  window.open(`https://wa.me/?text=${encodeURIComponent(shareText(phase.code))}`, '_blank', 'noopener');
+};
+
+ui.onLobbyCancel = () => {
+  clearSlowTimer();
+  net.send({ type: 'cancel' });
+  goToMenu();
+};
+
+function goToMenu() {
+  clearSlowTimer();
+  phase = { kind: 'menu' };
+  game.stop();
+  clearRoomFromUrl();
+  ui.showMenu();
+}
+
+// ---------- in game ----------
+
+ui.onLeave = () => {
+  if (phase.kind === 'online') {
+    net.clearOutbox();
+    net.send({ type: 'leave' });
+  }
+  goToMenu();
 };
 
 ui.onRestart = () => {
-  ui.showHUD();
+  if (phase.kind === 'online') {
+    if (phase.opponentGone) return;
+    phase.rematchAsked = true;
+    net.send({ type: 'rematch' });
+    ui.updateGameOver('Waiting for them to accept…', 'REMATCH SENT', true);
+    return;
+  }
+  ui.showHUD(false);
   game.startNewGame();
 };
 
-ui.onSoundToggle = (enabled) => {
-  game.setSoundEnabled(enabled);
+ui.onNewOpponent = () => {
+  net.send({ type: 'leave' });
+  startSearching();
 };
+
+ui.onMenu = () => {
+  if (phase.kind === 'online') net.send({ type: 'leave' });
+  goToMenu();
+};
+
+game.onOnlineGameOver = (m: ServerGameOver) => {
+  if (phase.kind !== 'online') return;
+  phase.over = true;
+  phase.rematchAsked = false;
+  const me = phase.you;
+  const opp: Player = me === 1 ? 2 : 1;
+  const oppName = phase.names[opp - 1];
+  const won = m.winner === me;
+
+  let title: string;
+  switch (m.reason) {
+    case 'bust':
+      title = won ? `${oppName} BLASTED INTO A ROCK!` : 'YOU BLASTED INTO A ROCK!';
+      break;
+    case 'left':
+    case 'disconnect':
+      title = won ? `${oppName} LEFT — YOU WIN` : 'YOU LEFT THE GAME';
+      phase.opponentGone = won;
+      break;
+    case 'afk':
+      title = won ? `${oppName} STOPPED PLAYING` : 'YOU RAN OUT OF TIME';
+      break;
+    default:
+      title = won ? 'YOU WIN!' : `${oppName} WINS!`;
+  }
+  ui.showGameOverView({
+    title: title.toUpperCase(),
+    subtitle: `YOU ${m.scores[me - 1]} — ${m.scores[opp - 1]} ${oppName.toUpperCase()}`,
+    note: phase.opponentGone ? 'Your opponent has gone.' : '',
+    primaryLabel: 'REMATCH',
+    primaryDisabled: phase.opponentGone,
+    showNewOpponent: true,
+  });
+};
+
+// ---------- network events ----------
+
+net.on('welcome', (m) => {
+  ui.setOnlineCount(m.online);
+  if (phase.kind === 'online' && !phase.over && !m.inGame) {
+    // Server restarted or our match expired while we were away.
+    game.stop();
+    phase = { kind: 'menu' };
+    ui.showLobby({ kind: 'error', title: 'MATCH LOST', text: 'The connection dropped for too long and the match ended. Sorry about that!' });
+    return;
+  }
+  // Re-enter whatever we were doing when the connection dropped.
+  if (phase.kind === 'searching') {
+    net.send({ type: 'queue' });
+    ui.showLobby({ kind: 'searching' });
+  } else if (phase.kind === 'hosting') {
+    // the server resends roomCreated if it still has the room
+  } else if (phase.kind === 'joining') {
+    net.send({ type: 'joinRoom', code: phase.code });
+  }
+  if (phase.kind === 'online') ui.hideNetBanner();
+});
+
+net.on('stats', (m) => ui.setOnlineCount(m.online));
+
+net.on('queued', () => {
+  if (phase.kind === 'searching') ui.showLobby({ kind: 'searching' });
+});
+
+net.on('roomCreated', (m) => {
+  if (phase.kind !== 'friend' && phase.kind !== 'hosting' && phase.kind !== 'joining') return;
+  phase = { kind: 'hosting', code: m.code };
+  ui.showLobby({ kind: 'room', code: m.code, shareUrl: shareUrl(m.code) });
+});
+
+net.on('error', (m) => {
+  if (m.code === 'ROOM_NOT_FOUND' || m.code === 'HOST_OFFLINE' || m.code === 'ROOM_EXPIRED') {
+    clearRoomFromUrl();
+    phase = { kind: 'friend' };
+    ui.showLobby({ kind: 'friend', error: m.message });
+  }
+});
+
+net.on('match', (m: MatchInfo & { opponentConnected: boolean }) => {
+  clearSlowTimer();
+  clearRoomFromUrl();
+  phase = { kind: 'online', you: m.you, names: m.names, over: false, rematchAsked: false, opponentGone: false };
+  ui.showHUD(true);
+  game.startOnline(m, {
+    aim: (x, z, t) => net.send({ type: 'aim', x, z, t }),
+    launch: (vx, vz) => net.send({ type: 'launch', vx, vz }),
+    shotResult: (seeds, hits, bust) => net.send({ type: 'shotResult', seeds, hits, bust }),
+  });
+  if (!m.opponentConnected) ui.showNetBanner(`${opponentName()} lost connection — waiting…`);
+});
+
+net.on('aim', (m) => game.remoteAim(m.x, m.z, m.t));
+net.on('launch', (m) => game.remoteLaunch(m.vx, m.vz));
+net.on('state', (m) => game.applyServerState(m));
+net.on('gameOver', (m) => {
+  if (phase.kind !== 'online') return;
+  clearAwayTimer();
+  ui.hideNetBanner();
+  game.applyGameOver(m);
+});
+
+net.on('opponentAway', (m) => {
+  if (phase.kind !== 'online' || phase.over) return;
+  let left = Math.round(m.graceMs / 1000);
+  const tick = () => {
+    if (phase.kind !== 'online' || phase.over) { clearAwayTimer(); return; }
+    ui.showNetBanner(`${opponentName()} lost connection — waiting ${left}s`);
+    left = Math.max(0, left - 1);
+  };
+  clearAwayTimer();
+  tick();
+  awayTimer = window.setInterval(tick, 1000);
+});
+
+net.on('opponentBack', () => {
+  clearAwayTimer();
+  ui.hideNetBanner();
+});
+
+net.on('rematchRequested', () => {
+  if (phase.kind !== 'online' || !phase.over) return;
+  ui.updateGameOver(`${opponentName()} wants a rematch!`, 'ACCEPT REMATCH', false);
+});
+
+net.on('opponentLeft', () => {
+  if (phase.kind !== 'online') return;
+  phase.opponentGone = true;
+  if (phase.over) {
+    ui.updateGameOver(`${opponentName()} left. Find a new opponent?`);
+    ui.setRematchAvailable(false);
+  }
+});
+
+net.onStatus = (s) => {
+  if (s === 'closed') {
+    ui.setOnlineCount(null);
+    if (phase.kind === 'online' && !phase.over) ui.showNetBanner('Connection lost — reconnecting…');
+    if (phase.kind === 'searching') ui.showLobby({ kind: 'connecting' });
+  }
+};
+
+function opponentName() {
+  if (phase.kind !== 'online') return 'Opponent';
+  return phase.names[phase.you === 1 ? 1 : 0];
+}
+
+function clearAwayTimer() {
+  if (awayTimer !== null) { clearInterval(awayTimer); awayTimer = null; }
+}
+
+// ---------- room links: /r/K7QX or ?room=K7QX ----------
+
+function roomFromUrl(): string | null {
+  const m = location.pathname.match(/^\/r\/([A-Za-z0-9]{4,8})\/?$/);
+  if (m) return m[1].toUpperCase();
+  const q = new URLSearchParams(location.search).get('room');
+  return q && /^[A-Za-z0-9]{4,8}$/.test(q) ? q.toUpperCase() : null;
+}
+
+function clearRoomFromUrl() {
+  if (location.pathname !== '/' || location.search) {
+    try { history.replaceState(null, '', '/'); } catch { /* ignore */ }
+  }
+}
+
+// ---------- boot ----------
+
+if (new URLSearchParams(location.search).has('debug')) (window as any).__dulu = game;
 
 game.init().then(() => {
   ui.showMenu();
+  net.connect(); // shows "N online" on the menu
+  const code = roomFromUrl();
+  if (code) joinRoom(code);
 });

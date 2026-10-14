@@ -317,3 +317,48 @@ describe('passes', () => {
     assert.throws(() => pay.restore({ phone: '0700000000', guestId: 'other_device_1' }, 'ip'), (e) => e.status === 404);
   });
 });
+
+describe('background reconciler (webhook slot belongs to Jukila)', () => {
+  test('confirms a payment with no webhook and no client polling, and grants once', async () => {
+    let state = 'pending';
+    const ctx = setup({
+      fetchHandler: (url) => url.includes('check-request-status')
+        ? { json: { request_status: state, amount: 2000 } }
+        : { json: { internal_reference: 'INT-R1' } },
+    });
+    const { reference } = await ctx.pay.collect({ phone: '0772123456', coffees: 1, guestId: GUEST }, 'ip');
+    assert.equal(await ctx.pay.reconcileOnce(), 1);
+    assert.equal(row(ctx.db, reference).status, 'PENDING');
+    state = 'success'; // player approves after closing the page
+    ctx.advance(20_000);
+    await ctx.pay.reconcileOnce();
+    assert.equal(row(ctx.db, reference).status, 'SUCCESS');
+    assert.equal(ctx.granted.length, 1);
+    // Nothing left to check afterwards
+    assert.equal(await ctx.pay.reconcileOnce(), 0);
+    assert.equal(ctx.granted.length, 1);
+  });
+
+  test('checks older payments only every 5 minutes and gives up after 24h', async () => {
+    const ctx = setup({
+      fetchHandler: (url) => url.includes('check-request-status')
+        ? { json: { request_status: 'pending' } }
+        : { json: { internal_reference: 'INT-R2' } },
+    });
+    await ctx.pay.collect({ phone: '0772123456', coffees: 1, guestId: GUEST }, 'ip');
+    const polls = () => ctx.fetchImpl.calls.filter((c) => c.url.includes('check-request-status')).length;
+    ctx.advance(20 * 60_000);
+    await ctx.pay.reconcileOnce(); assert.equal(polls(), 1);
+    ctx.advance(60_000);
+    await ctx.pay.reconcileOnce(); assert.equal(polls(), 1, 'too soon for a slow re-check');
+    ctx.advance(5 * 60_000);
+    await ctx.pay.reconcileOnce(); assert.equal(polls(), 2);
+    ctx.advance(25 * 3600_000);
+    await ctx.pay.reconcileOnce(); assert.equal(polls(), 2, 'older than 24h: left alone');
+  });
+
+  test('does nothing when payments are off', async () => {
+    const { pay } = setup({ env: {} });
+    assert.equal(await pay.reconcileOnce(), 0);
+  });
+});

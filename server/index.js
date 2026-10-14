@@ -85,6 +85,9 @@ const payments = createPayments({
   },
 });
 
+// Confirm payments ourselves; the Relworx webhook slot belongs to Jukila.
+const stopReconciler = payments.startReconciler();
+
 /** Online play needs an active coffee (unless payments aren't configured). */
 function requireCoffee(session) {
   if (payments.hasPass(session.guestId)) return true;
@@ -706,6 +709,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
     log('shutting down');
     for (const ws of wss.clients) try { ws.close(1012, 'server restarting'); } catch {}
+    stopReconciler();
     server.close(() => { try { db.close(); } catch {} process.exit(0); });
     setTimeout(() => process.exit(0), 2000).unref();
   });

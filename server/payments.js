@@ -35,7 +35,6 @@ export function normalizePhone(input) {
   return /^\+256\d{9}$/.test(out) ? out : null;
 }
 
-function nowIso() { return new Date().toISOString(); }
 
 function safeEqualHex(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
@@ -95,6 +94,7 @@ export function createPayments(opts) {
   const onPassGranted = opts.onPassGranted ?? (() => {});
   const log = opts.log ?? ((...a) => console.log(new Date().toISOString(), ...a));
   const now = opts.now ?? (() => Date.now());
+  const nowIso = () => new Date(now()).toISOString();
 
   const API_KEY = env.RELWORX_API_KEY || '';
   const ACCOUNT_NO = env.RELWORX_ACCOUNT_NO || '';
@@ -134,6 +134,11 @@ export function createPayments(opts) {
       ON CONFLICT(guest_id) DO UPDATE SET msisdn = COALESCE(excluded.msisdn, passes.msisdn),
         expires_at = excluded.expires_at, updated_at = excluded.updated_at`),
     passBestForMsisdn: db.prepare(`SELECT MAX(expires_at) AS expires_at FROM passes WHERE msisdn = ?`),
+    // Background reconciler: PENDING payments Relworx accepted, oldest-checked first.
+    pendingSince: db.prepare(`SELECT reference, created_at FROM payments
+      WHERE status = 'PENDING' AND internal_ref IS NOT NULL AND created_at > ?
+      ORDER BY updated_at ASC LIMIT ?`),
+    touch: db.prepare(`UPDATE payments SET updated_at = ? WHERE reference = ? AND status = 'PENDING'`),
   };
 
   // ----- passes
@@ -424,5 +429,53 @@ export function createPayments(opts) {
     return true;
   }
 
-  return { enabled, priceUgx: PRICE_UGX, passHours: PASS_HOURS, hasPass, passFor, config, collect, status, webhook, restore, finalize, route };
+  // ----- background reconciler
+  //
+  // The Relworx account is shared with Jukila and has a single "request
+  // payment webhook" URL, which points at Jukila. So DULU can't rely on the
+  // webhook: the server polls Relworx itself for every payment still PENDING.
+  // A player who approves the prompt after closing the page still gets their
+  // coffee, and the game unlocks live if they're online.
+  //   - payments younger than 15 min: checked every tick (~20 s)
+  //   - 15 min – 24 h old: checked about every 5 min
+  //   - older than 24 h: left alone (stay PENDING for manual review)
+  const FRESH_MS = 15 * 60_000;
+  const MAX_AGE_MS = 24 * 3600_000;
+  const SLOW_EVERY_MS = 5 * 60_000;
+  const lastSlowCheck = new Map();
+
+  async function reconcileOnce(limit = 25) {
+    if (!enabled) return 0;
+    const t = now();
+    const rows = q.pendingSince.all(new Date(t - MAX_AGE_MS).toISOString(), limit);
+    let checked = 0;
+    for (const r of rows) {
+      const age = t - Date.parse(r.created_at);
+      if (age > FRESH_MS) {
+        const last = lastSlowCheck.get(r.reference) || 0;
+        if (t - last < SLOW_EVERY_MS) continue;
+        lastSlowCheck.set(r.reference, t);
+      }
+      q.touch.run(nowIso(), r.reference); // rotate through the queue fairly
+      try { await status(r.reference); } catch (e) { log('reconcile error', r.reference, e?.message || e); }
+      checked++;
+    }
+    if (lastSlowCheck.size > 5000) lastSlowCheck.clear();
+    return checked;
+  }
+
+  /** Start polling in the background. Returns a stop function. */
+  function startReconciler(everyMs = 20_000) {
+    if (!enabled) return () => {};
+    let running = false;
+    const timer = setInterval(async () => {
+      if (running) return; // never overlap (each Relworx call can take up to 30 s)
+      running = true;
+      try { await reconcileOnce(); } finally { running = false; }
+    }, everyMs);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }
+
+  return { enabled, priceUgx: PRICE_UGX, passHours: PASS_HOURS, hasPass, passFor, config, collect, status, webhook, restore, finalize, route, reconcileOnce, startReconciler };
 }

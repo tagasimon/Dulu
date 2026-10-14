@@ -68,8 +68,8 @@ describe('collect', () => {
   test('rejects amount below 500 and non-coffee amounts', async () => {
     const { pay } = setup();
     await assert.rejects(pay.collect({ phone: '0772123456', amountUgx: 400, guestId: GUEST }, 'ip'), /at least 500/);
-    await assert.rejects(pay.collect({ phone: '0772123456', amountUgx: 2500, guestId: GUEST }, 'ip'), /coffees/);
-    await assert.rejects(pay.collect({ phone: '0772123456', coffees: 11, guestId: GUEST }, 'ip'), /coffees/);
+    await assert.rejects(pay.collect({ phone: '0772123456', amountUgx: 2500, guestId: GUEST }, 'ip'), /Rolexes/);
+    await assert.rejects(pay.collect({ phone: '0772123456', coffees: 11, guestId: GUEST }, 'ip'), /Rolexes/);
     await assert.rejects(pay.collect({ phone: '0772123456', coffees: 0, guestId: GUEST }, 'ip'), /at least 500/);
   });
 

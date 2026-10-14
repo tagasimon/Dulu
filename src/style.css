@@ -823,3 +823,129 @@ input, textarea {
   .coffee-why { font-size: 13px; }
   .coffee-status { margin-top: 6px; }
 }
+
+/* ---------- Who's online (menu pill) ---------- */
+.online-pill {
+  margin-top: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(360px, 88vw);
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(80, 200, 120, 0.12);
+  border: 1px solid rgba(80, 200, 120, 0.35);
+  font-size: 12.5px;
+  line-height: 1.35;
+  font-weight: 600;
+  text-align: left;
+}
+
+.online-pill .dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #4cd07d;
+  box-shadow: 0 0 0 0 rgba(76, 208, 125, 0.6);
+}
+
+.online-pill.hot {
+  background: rgba(255, 176, 86, 0.16);
+  border-color: rgba(255, 176, 86, 0.6);
+  color: #ffe2bd;
+}
+
+.online-pill.hot .dot {
+  background: var(--accent);
+  animation: pulse-dot 1.4s ease-out infinite;
+}
+
+.online-pill.empty {
+  background: rgba(245, 230, 207, 0.06);
+  border-color: rgba(245, 230, 207, 0.18);
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+.online-pill.empty .dot { background: rgba(245, 230, 207, 0.4); }
+
+@keyframes pulse-dot {
+  0% { box-shadow: 0 0 0 0 rgba(255, 176, 86, 0.65); }
+  100% { box-shadow: 0 0 0 9px rgba(255, 176, 86, 0); }
+}
+
+.online-pill + .menu-buttons { margin-top: 14px; }
+
+.lobby-live {
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.lobby-live:empty { display: none; }
+
+/* ---------- Buy Me a Coffee button (players outside Uganda) ---------- */
+.bmc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 8px auto 0;
+  padding: 4px 18px 6px;
+  border-radius: 10px;
+  border: 1px solid #000;
+  background: #ffdd00;
+  color: #000;
+  font-family: 'Cookie', cursive;
+  font-size: 24px;
+  line-height: 1.15;
+  cursor: pointer;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+  text-decoration: none;
+}
+
+.bmc-btn::before { content: '🌯'; font-size: 18px; font-family: system-ui, sans-serif; }
+
+.bmc-btn.small { font-size: 20px; padding: 2px 14px 4px; margin-top: 6px; }
+
+.coffee-status .bmc-btn { display: flex; }
+
+#coffee-status-ug { display: block; margin: 6px auto 0; font-size: 11.5px; }
+#coffee-status-ug.hidden { display: none; }
+
+/* ---------- Game over: quiet support line ---------- */
+.go-support {
+  margin-top: 14px;
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.go-support .link-btn { font-size: 13px; }
+
+/* ---------- Home button in the HUD ---------- */
+#btn-leave {
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  padding: 0 14px;
+  border: 1px solid rgba(245, 230, 207, 0.25);
+}
+
+#btn-leave.armed {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+@media (max-height: 520px) {
+  .online-pill { margin-top: 8px; padding: 5px 12px; font-size: 11.5px; }
+  .online-pill + .menu-buttons { margin-top: 8px; }
+}
+
+#game-over .go-support .bmc-btn {
+  width: auto;
+  margin: 8px auto 0;
+  display: flex;
+}
+
+#game-over .go-support .link-btn { width: auto; margin-top: 0; }
+.go-support { opacity: 1; }
+.go-support { color: rgba(245, 230, 207, 0.8); }

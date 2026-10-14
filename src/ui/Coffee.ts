@@ -1,5 +1,7 @@
-// "Buy me a coffee" sheet.
-// 1 coffee (default 2,000 UGX) = 24h of online play; more coffees stack.
+// "Buy me a Rolex" sheet (a Rolex is Uganda's chapati-and-egg street food).
+// Players in Uganda pay with Mobile Money: 1 Rolex (default 2,000 UGX) = 24h
+// of online play; more Rolexes stack. Players elsewhere get a Buy Me a Coffee
+// link instead and play online free. (Code still says "coffee" internally.)
 // The player only ever enters a phone number — the Mobile Money PIN prompt
 // comes from their network, never from this page.
 
@@ -12,6 +14,8 @@ export interface CoffeeConfig {
 }
 
 type View = 'buy' | 'waiting' | 'success' | 'failed' | 'slow' | 'restore';
+
+import { regionStore, BMC_URL } from '../net/region';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const POLL_MS = 3000;
@@ -61,6 +65,8 @@ export class CoffeeSheet {
   private pollTimer: number | null = null;
   private pollStarted = 0;
   private afterUnlock: (() => void) | null = null;
+  /** gate = needed to play online; tip = a voluntary "thank you" from the menu/game over */
+  private mode: 'gate' | 'tip' = 'tip';
 
   constructor(private guestId: () => string) {
     $('coffee-minus').addEventListener('click', () => this.setCount(this.coffees - 1));
@@ -72,6 +78,7 @@ export class CoffeeSheet {
     $('coffee-retry').addEventListener('click', () => this.show('buy'));
     $('coffee-continue').addEventListener('click', () => this.finish());
     $('coffee-close').addEventListener('click', () => this.close());
+    $('coffee-card-link').addEventListener('click', () => openBmc());
     for (const id of ['coffee-phone', 'coffee-restore-phone']) {
       $(id).addEventListener('pointerdown', (e) => e.stopPropagation());
     }
@@ -79,7 +86,21 @@ export class CoffeeSheet {
 
   /** Online play allowed right now? */
   get unlocked() {
-    return !this.config.enabled || this.config.pass.active;
+    return !this.config.enabled || regionStore.value !== 'UG' || this.config.pass.active;
+  }
+
+  /** Can this player pay with Mobile Money here? */
+  get mobileMoney() {
+    return this.config.enabled && regionStore.value === 'UG';
+  }
+
+  /**
+   * Voluntary support (never blocks play): Mobile Money sheet in Uganda,
+   * Buy Me a Coffee page everywhere else.
+   */
+  support() {
+    if (this.mobileMoney) this.open(undefined, 'tip');
+    else openBmc();
   }
 
   setConfig(c: CoffeeConfig) {
@@ -100,8 +121,9 @@ export class CoffeeSheet {
    * Open the sheet. `then` runs after a successful purchase (e.g. continue to
    * matchmaking), so the player doesn't have to tap Play Online again.
    */
-  open(then?: () => void) {
+  open(then?: () => void, mode: 'gate' | 'tip' = then ? 'gate' : 'tip') {
     this.afterUnlock = then ?? null;
+    this.mode = mode;
     this.coffees = 1;
     this.show('buy');
     this.el.classList.remove('hidden');
@@ -204,7 +226,7 @@ export class CoffeeSheet {
   private showSuccess(restored = false) {
     this.stopPolling();
     const exp = this.config.pass.expiresAt;
-    $('coffee-success-title').textContent = restored ? 'WELCOME BACK ☕' : 'THANK YOU! ☕';
+    $('coffee-success-title').textContent = restored ? 'WELCOME BACK 🌯' : 'THANK YOU! 🌯';
     $('coffee-success-text').textContent = exp
       ? `Online play is unlocked until ${fmtExpiry(exp)}.`
       : 'Online play is unlocked.';
@@ -227,6 +249,10 @@ export class CoffeeSheet {
     }
     $('coffee-close').textContent = v === 'success' ? 'CLOSE' : v === 'waiting' ? 'CLOSE (KEEPS CHECKING)' : 'NOT NOW';
     if (v === 'buy') {
+      $('coffee-why').textContent = this.mode === 'gate'
+        ? 'Same Device is always free. Online games run on a small server that costs real money every month — a Rolex helps keep the lights on.'
+        : 'DULU is free on one device. A Rolex helps keep the online server\'s lights on, and unlocks online play as a thank-you.';
+      $('coffee-card-row').classList.toggle('hidden', this.mode === 'gate');
       const input = $<HTMLInputElement>('coffee-phone');
       if (!input.value) input.value = readPhone();
       this.error('');
@@ -243,18 +269,18 @@ export class CoffeeSheet {
     const c = this.config;
     const total = this.coffees * c.priceUgx;
     const hours = this.coffees * c.passHours;
-    $('coffee-count').textContent = `${this.coffees} coffee${this.coffees > 1 ? 's' : ''}`;
-    $('coffee-cups').textContent = '☕'.repeat(Math.min(this.coffees, 5)) + (this.coffees > 5 ? '+' : '');
+    $('coffee-count').textContent = `${this.coffees} Rolex${this.coffees > 1 ? 'es' : ''}`;
+    $('coffee-cups').textContent = '🌯'.repeat(Math.min(this.coffees, 5)) + (this.coffees > 5 ? '+' : '');
     $('coffee-duration').textContent = hours % 24 === 0
       ? `${hours / 24} day${hours / 24 > 1 ? 's' : ''} online`
       : `${hours} hours online`;
-    $('coffee-buy-btn').textContent = `BUY ${this.coffees} COFFEE${this.coffees > 1 ? 'S' : ''} · ${fmtUgx(total)}`;
+    $('coffee-buy-btn').textContent = `BUY ${this.coffees} ROLEX${this.coffees > 1 ? 'ES' : ''} · ${fmtUgx(total)}`;
     $<HTMLButtonElement>('coffee-minus').disabled = this.coffees <= 1;
     $<HTMLButtonElement>('coffee-plus').disabled = this.coffees >= c.maxCoffees;
-    $('coffee-price-note').textContent = `1 coffee = ${fmtUgx(c.priceUgx)} = ${c.passHours} hours. Buy more to stack days.`;
+    $('coffee-price-note').textContent = `1 Rolex = ${fmtUgx(c.priceUgx)} = ${c.passHours} hours of online play. More Rolexes stack days.`;
     const pass = c.pass;
     $('coffee-current').textContent = pass.active && pass.expiresAt
-      ? `You're unlocked until ${fmtExpiry(pass.expiresAt)}. More coffees add time on top.`
+      ? `You're unlocked until ${fmtExpiry(pass.expiresAt)}. More Rolexes add time on top.`
       : '';
   }
 
@@ -262,13 +288,20 @@ export class CoffeeSheet {
     $('coffee-error').textContent = text;
   }
 
-  /** One-line status for the menu. */
-  menuStatus(): { text: string; cta: string } | null {
+  /** Quiet line for the menu (and what tapping it does). */
+  menuStatus(): { text: string; cta: string; kind: 'mm' | 'bmc' } {
     const c = this.config;
-    if (!c.enabled) return null;
-    if (c.pass.active && c.pass.expiresAt) {
-      return { text: `☕ Online unlocked until ${fmtExpiry(c.pass.expiresAt)}`, cta: 'add a coffee' };
+    if (this.mobileMoney) {
+      if (c.pass.active && c.pass.expiresAt) {
+        return { text: `🌯 Online unlocked until ${fmtExpiry(c.pass.expiresAt)}`, cta: 'add a Rolex', kind: 'mm' };
+      }
+      return { text: 'Same Device is always free. Online play runs on Rolex 🌯', cta: 'buy me a Rolex', kind: 'mm' };
     }
-    return { text: 'Same Device is always free. Online play runs on coffee ☕', cta: 'buy me a coffee' };
+    return { text: 'DULU is free to play. Enjoying it?', cta: 'Buy me a Rolex', kind: 'bmc' };
   }
+}
+
+/** Buy Me a Coffee page for players outside Uganda (card payments). */
+export function openBmc() {
+  window.open(BMC_URL, '_blank', 'noopener');
 }

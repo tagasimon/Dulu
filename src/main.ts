@@ -3,12 +3,13 @@ import { Game, type MatchInfo, type ServerGameOver } from './game/Game';
 import { UI, type Player } from './ui/UI';
 import { Net } from './net/Net';
 import { identity } from './net/identity';
-import { CoffeeSheet, type CoffeeConfig } from './ui/Coffee';
+import { CoffeeSheet, openBmc, type CoffeeConfig } from './ui/Coffee';
+import { regionStore } from './net/region';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 const ui = new UI();
 const game = new Game(canvas, ui);
-const net = new Net(Net.defaultUrl(), () => ({ guestId: identity.guestId, name: identity.displayName }));
+const net = new Net(Net.defaultUrl(), () => ({ guestId: identity.guestId, name: identity.displayName, region: regionStore.value }));
 
 // What the player is currently doing, so reconnects can pick up where they were.
 type Phase =
@@ -38,6 +39,7 @@ ui.onNameChange = (name) => {
 
 ui.onPlay = () => {
   phase = { kind: 'local' };
+  armBack();
   ui.showHUD(false);
   game.startNewGame();
 };
@@ -47,23 +49,53 @@ ui.onPlay = () => {
 /** Run an online action now, or after the player buys a coffee. Same Device never asks. */
 function withCoffee(action: () => void) {
   pendingOnlineAction = action;
+  armBack();
   if (coffee.unlocked) action();
   else coffee.open(action);
 }
 
+// "Buy me a Rolex" — a quiet line on the menu and on the game-over card.
+// Uganda: Mobile Money sheet. Elsewhere: Buy Me a Coffee page (card).
 const coffeeStatusEl = document.getElementById('coffee-status')!;
 const coffeeStatusText = document.getElementById('coffee-status-text')!;
 const coffeeStatusCta = document.getElementById('coffee-status-cta')!;
-coffeeStatusCta.addEventListener('click', () => coffee.open());
-coffee.onChange = () => {
+const coffeeStatusUg = document.getElementById('coffee-status-ug')!;
+const goSupportBtn = document.getElementById('go-support-btn')!;
+
+function renderSupport() {
   const st = coffee.menuStatus();
-  coffeeStatusEl.classList.toggle('hidden', !st);
-  if (st) { coffeeStatusText.textContent = st.text; coffeeStatusCta.textContent = st.cta; }
-};
+  coffeeStatusEl.classList.remove('hidden');
+  coffeeStatusText.textContent = st.text;
+  coffeeStatusCta.textContent = st.cta;
+  coffeeStatusCta.className = st.kind === 'bmc' ? 'bmc-btn' : 'link-btn';
+  goSupportBtn.className = st.kind === 'bmc' ? 'bmc-btn small' : 'link-btn';
+  goSupportBtn.textContent = st.kind === 'bmc' ? 'Buy me a Rolex' : 'Buy me a Rolex 🌯';
+  // Outside Uganda, offer a way into Mobile Money (only when payments are on).
+  coffeeStatusUg.classList.toggle('hidden', !(st.kind === 'bmc' && coffee.config.enabled));
+}
+coffee.onChange = renderSupport;
+renderSupport();
+
+function support() {
+  if (coffee.mobileMoney) armBack();
+  coffee.support();
+}
+coffeeStatusCta.addEventListener('click', support);
+goSupportBtn.addEventListener('click', support);
+coffeeStatusUg.addEventListener('click', () => {
+  regionStore.setUganda();
+  net.send({ type: 'setRegion', region: 'UG' });
+  renderSupport();
+  support();
+});
+document.getElementById('coffee-close')!.addEventListener('click', () => {
+  if (phase.kind === 'menu') disarmBack();
+});
 
 ui.onPlayOnline = () => withCoffee(startSearching);
 ui.onPlayFriend = () => {
   phase = { kind: 'friend' };
+  armBack();
   ui.showLobby({ kind: 'friend' });
   net.connect();
 };
@@ -99,6 +131,7 @@ ui.onJoinRoom = (code) => joinRoom(code);
 
 function joinRoom(code: string) {
   phase = { kind: 'joining', code };
+  armBack();
   ui.showLobby({ kind: 'joining', code });
   net.send({ type: 'joinRoom', code });
 }
@@ -143,6 +176,7 @@ ui.onLobbyCancel = () => {
 };
 
 function goToMenu() {
+  disarmBack();
   clearSlowTimer();
   phase = { kind: 'menu' };
   game.stop();
@@ -220,7 +254,7 @@ game.onOnlineGameOver = (m: ServerGameOver) => {
 // ---------- network events ----------
 
 net.on('welcome', (m) => {
-  ui.setOnlineCount(m.online);
+  ui.setLobbyStats({ online: m.online, playing: m.playing ?? 0, waiting: m.waiting ?? 0 });
   if (m.coffee) coffee.setConfig(m.coffee as CoffeeConfig);
   if (phase.kind === 'online' && !phase.over && !m.inGame) {
     // Server restarted or our match expired while we were away.
@@ -241,7 +275,7 @@ net.on('welcome', (m) => {
   if (phase.kind === 'online') ui.hideNetBanner();
 });
 
-net.on('stats', (m) => ui.setOnlineCount(m.online));
+net.on('stats', (m) => ui.setLobbyStats({ online: m.online, playing: m.playing ?? 0, waiting: m.waiting ?? 0 }));
 
 net.on('queued', () => {
   if (phase.kind === 'searching') ui.showLobby({ kind: 'searching' });
@@ -275,6 +309,7 @@ net.on('error', (m) => {
 
 net.on('match', (m: MatchInfo & { opponentConnected: boolean }) => {
   clearSlowTimer();
+  armBack();
   clearRoomFromUrl();
   phase = { kind: 'online', you: m.you, names: m.names, over: false, rematchAsked: false, opponentGone: false };
   ui.showHUD(true);
@@ -330,7 +365,7 @@ net.on('opponentLeft', () => {
 
 net.onStatus = (s) => {
   if (s === 'closed') {
-    ui.setOnlineCount(null);
+    ui.setLobbyStats(null);
     if (phase.kind === 'online' && !phase.over) ui.showNetBanner('Connection lost — reconnecting…');
     if (phase.kind === 'searching') ui.showLobby({ kind: 'connecting' });
   }
@@ -359,6 +394,54 @@ function clearRoomFromUrl() {
     try { history.replaceState(null, '', '/'); } catch { /* ignore */ }
   }
 }
+
+// ---------- phone / browser back button → Home ----------
+// While away from the menu we keep one extra history entry, so the back
+// button lands here instead of leaving the site.
+let backTrap = false;
+let ignorePops = 0;
+
+function armBack() {
+  if (backTrap) return;
+  try { history.pushState({ dulu: 'away' }, ''); backTrap = true; } catch { /* ignore */ }
+}
+
+function disarmBack() {
+  if (!backTrap) return;
+  backTrap = false;
+  ignorePops++;
+  try { history.back(); } catch { ignorePops--; }
+}
+
+window.addEventListener('popstate', () => {
+  if (ignorePops > 0) { ignorePops--; return; }
+  backTrap = false;
+  const sheetOpen = !document.getElementById('coffee')!.classList.contains('hidden');
+  const tutOpen = !document.getElementById('tutorial')!.classList.contains('hidden');
+  if (sheetOpen || tutOpen) {
+    if (sheetOpen) coffee.close();
+    if (tutOpen) document.getElementById('tutorial')!.classList.add('hidden');
+    if (phase.kind !== 'menu') armBack();
+    return;
+  }
+  switch (phase.kind) {
+    case 'online':
+      if (!phase.over) {
+        armBack();         // stay; first press asks, second press leaves
+        ui.requestLeave();
+        return;
+      }
+      ui.onMenu();
+      return;
+    case 'local':
+      ui.onLeave();
+      return;
+    case 'menu':
+      return;
+    default:
+      ui.onLobbyCancel();
+  }
+});
 
 // ---------- boot ----------
 

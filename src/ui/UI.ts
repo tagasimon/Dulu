@@ -2,6 +2,8 @@ export type Player = 1 | 2;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
+export interface LobbyStats { online: number; playing: number; waiting: number }
+
 export type LobbyView =
   | { kind: 'searching'; slow?: boolean }
   | { kind: 'friend'; error?: string }
@@ -97,18 +99,7 @@ export class UI {
     this.newOppBtn.addEventListener('click', () => this.onNewOpponent());
     $('btn-go-menu').addEventListener('click', () => this.onMenu());
 
-    this.leaveBtn.addEventListener('click', () => {
-      // Online, leaving forfeits — ask for a second tap instead of a dialog.
-      if (this.leaveNeedsConfirm && performance.now() > this.leaveArmedUntil) {
-        this.leaveArmedUntil = performance.now() + 3000;
-        this.leaveBtn.classList.add('armed');
-        this.leaveBtn.textContent = 'LEAVE?';
-        window.setTimeout(() => this.disarmLeave(), 3000);
-        return;
-      }
-      this.disarmLeave();
-      this.onLeave();
-    });
+    this.leaveBtn.addEventListener('click', () => this.requestLeave());
 
     this.soundBtn.addEventListener('click', () => {
       this.soundEnabled = !this.soundEnabled;
@@ -147,8 +138,50 @@ export class UI {
     this.nameInput.placeholder = placeholder;
   }
 
+  private stats: LobbyStats | null = null;
+  private searching = false;
+
+  /** Live "who's around" for the menu pill and the matchmaking screen. */
+  setLobbyStats(st: LobbyStats | null) {
+    this.stats = st;
+    this.renderStats();
+  }
+
+  /** Kept for older call sites. */
   setOnlineCount(n: number | null) {
-    this.onlineCountEl.textContent = n && n > 0 ? `${n} online now • ` : '';
+    this.setLobbyStats(n === null ? null : { online: n, playing: this.stats?.playing ?? 0, waiting: this.stats?.waiting ?? 0 });
+  }
+
+  private renderStats() {
+    const pill = $('online-pill');
+    const pillText = $('online-pill-text');
+    const live = $('lobby-live');
+    const st = this.stats;
+    if (!st) {
+      pill.classList.add('hidden');
+      live.textContent = '';
+      return;
+    }
+    // Counts include this player once they're connected.
+    const others = Math.max(0, st.online - 1);
+    const waitingOthers = Math.max(0, st.waiting - (this.searching ? 1 : 0));
+    pill.classList.remove('hidden');
+    pill.classList.toggle('hot', waitingOthers > 0);
+    pill.classList.toggle('empty', others === 0);
+    if (waitingOthers > 0) {
+      pillText.textContent = `${waitingOthers} player${waitingOthers > 1 ? 's' : ''} waiting for a match — tap Play Online`;
+    } else if (others > 0) {
+      const free = Math.max(0, others - st.playing);
+      pillText.textContent = `${others} other player${others > 1 ? 's' : ''} online` +
+        (st.playing > 0 ? ` · ${st.playing} in games${free > 0 ? `, ${free} free` : ''}` : '');
+    } else {
+      pillText.textContent = 'No one else online right now — Play a Friend to invite someone';
+    }
+    live.textContent = this.searching
+      ? (others > 0
+        ? `${others} other player${others > 1 ? 's' : ''} online${st.playing > 0 ? ` · ${st.playing} in games` : ''}`
+        : 'You\'re the only one online right now.')
+      : '';
   }
 
   showLobby(view: LobbyView) {
@@ -166,7 +199,9 @@ export class UI {
 
     [friend, room, err].forEach((el) => this.hide(el));
     this.show(spinner);
-    cancel.textContent = 'CANCEL';
+    cancel.textContent = '⌂ HOME';
+    this.searching = view.kind === 'searching';
+    this.renderStats();
     text.textContent = '';
 
     switch (view.kind) {
@@ -204,7 +239,7 @@ export class UI {
         title.textContent = view.title;
         this.hide(spinner);
         text.textContent = view.text;
-        cancel.textContent = 'BACK TO MENU';
+        cancel.textContent = '⌂ HOME';
         break;
     }
   }
@@ -293,10 +328,26 @@ export class UI {
     this.onNameChange(this.nameInput.value);
   }
 
+  /**
+   * Home button / phone back button during a game. Online, leaving forfeits,
+   * so the first press only asks ("tap again"); the second within 3 s leaves.
+   */
+  requestLeave() {
+    if (this.leaveNeedsConfirm && performance.now() > this.leaveArmedUntil) {
+      this.leaveArmedUntil = performance.now() + 3000;
+      this.leaveBtn.classList.add('armed');
+      this.leaveBtn.textContent = 'LEAVE GAME? TAP AGAIN';
+      window.setTimeout(() => { if (performance.now() >= this.leaveArmedUntil) this.disarmLeave(); }, 3050);
+      return;
+    }
+    this.disarmLeave();
+    this.onLeave();
+  }
+
   private disarmLeave() {
     this.leaveArmedUntil = 0;
     this.leaveBtn.classList.remove('armed');
-    this.leaveBtn.textContent = '✕';
+    this.leaveBtn.textContent = '⌂ HOME';
   }
 
   private show(el: HTMLElement) { el.classList.remove('hidden'); }

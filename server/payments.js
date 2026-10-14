@@ -1,4 +1,6 @@
-// "Buy me a coffee" — inbound Relworx mobile-money collections.
+// "Buy me a Rolex" — inbound Relworx mobile-money collections.
+// (A Rolex is Uganda's chapati-and-egg street food, ~2,000 UGX. Internally the
+// code still calls the unit a "coffee"; players only ever see "Rolex".)
 //
 // One job: the player enters a phone number + how many coffees; Relworx pushes
 // a Mobile Money PIN prompt to that phone; the money lands in the shared
@@ -100,7 +102,7 @@ export function createPayments(opts) {
   const ACCOUNT_NO = env.RELWORX_ACCOUNT_NO || '';
   const WEBHOOK_SECRET = env.RELWORX_WEBHOOK_SECRET || '';
   const REF_PREFIX = env.APP_REF_PREFIX || '';
-  const PRICE_UGX = Number(env.COFFEE_PRICE_UGX) || 2000;
+  const PRICE_UGX = Number(env.ROLEX_PRICE_UGX || env.COFFEE_PRICE_UGX) || 2000;
   const PASS_HOURS = Number(env.PASS_HOURS) || 24;
   const PASS_MS = PASS_HOURS * 3600_000;
   const RELWORX_BASE = (env.RELWORX_BASE_URL || DEFAULT_RELWORX_BASE).replace(/\/$/, '');
@@ -214,7 +216,7 @@ export function createPayments(opts) {
         if (coffees > 0) {
           grant = { guestId: p.guest_id, expiresAt: extendPass(p.guest_id, p.msisdn, coffees * PASS_MS), coffees };
         } else {
-          log('payment', reference, 'confirmed but amount', paid, 'is below one coffee — no pass granted');
+          log('payment', reference, 'confirmed but amount', paid, 'is below one Rolex — no pass granted');
         }
       }
       db.exec('COMMIT');
@@ -224,7 +226,7 @@ export function createPayments(opts) {
     }
 
     if (applied) {
-      log('payment', reference, newStatus, grant ? `+${grant.coffees} coffee(s)` : '');
+      log('payment', reference, newStatus, grant ? `+${grant.coffees} Rolex(es)` : '');
       if (grant) {
         try { onPassGranted(grant.guestId, grant.expiresAt); } catch (e) { log('onPassGranted error', e); }
       }
@@ -259,12 +261,13 @@ export function createPayments(opts) {
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(guestId)) throw new HttpError(400, 'Missing player ID. Reload the page and try again.');
 
     // Accept either a coffee count (what the game sends) or a raw amount.
-    let amountUgx = body?.coffees !== undefined ? Number(body.coffees) * PRICE_UGX : Number(body?.amountUgx);
+    const count = body?.rolexes ?? body?.coffees;
+    let amountUgx = count !== undefined ? Number(count) * PRICE_UGX : Number(body?.amountUgx);
     if (!Number.isInteger(amountUgx) || amountUgx < MIN_AMOUNT_UGX) {
       throw new HttpError(400, `Amount must be a whole number of at least ${MIN_AMOUNT_UGX} UGX.`);
     }
     if (amountUgx % PRICE_UGX !== 0 || amountUgx / PRICE_UGX > MAX_COFFEES) {
-      throw new HttpError(400, `Choose between 1 and ${MAX_COFFEES} coffees.`);
+      throw new HttpError(400, `Choose between 1 and ${MAX_COFFEES} Rolexes.`);
     }
 
     const phone = normalizePhone(body?.phone);
@@ -276,7 +279,7 @@ export function createPayments(opts) {
     }
 
     const coffees = amountUgx / PRICE_UGX;
-    const description = String(body?.description || `DULU ${coffees} coffee${coffees > 1 ? 's' : ''}`).slice(0, 60);
+    const description = String(body?.description || `DULU ${coffees} Rolex${coffees > 1 ? 'es' : ''}`).slice(0, 60);
     const rand = crypto.randomBytes(3).toString('hex').toUpperCase();
     const reference = `${REF_PREFIX}${now().toString(36).toUpperCase()}${rand}`;
     if (reference.length < 8 || reference.length > 36) throw new HttpError(500, 'Bad APP_REF_PREFIX length.');
@@ -386,7 +389,7 @@ export function createPayments(opts) {
     const phone = normalizePhone(body?.phone);
     if (!phone) throw new HttpError(400, 'Enter the number you paid with, e.g. 0772 123456.');
     const best = Number(q.passBestForMsisdn.get(phone)?.expires_at || 0);
-    if (best <= now()) throw new HttpError(404, 'No active coffee found for that number.');
+    if (best <= now()) throw new HttpError(404, 'No active Rolex found for that number.');
     const mine = q.passGet.get(guestId);
     if (!mine || Number(mine.expires_at) < best) q.passUpsert.run(guestId, phone, best, now());
     const pass = passFor(guestId);

@@ -73,7 +73,7 @@ const rooms = new Map();
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
-// ---------- payments ("buy me a coffee") ----------
+// ---------- payments ("buy me a Rolex") ----------
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
 const db = openDb(path.join(DATA_DIR, 'dulu.db'));
 const payments = createPayments({
@@ -88,11 +88,21 @@ const payments = createPayments({
 // Confirm payments ourselves; the Relworx webhook slot belongs to Jukila.
 const stopReconciler = payments.startReconciler();
 
-/** Online play needs an active coffee (unless payments aren't configured). */
+/**
+ * Online play needs an active Rolex, for players in Uganda only: Mobile Money
+ * is how they pay. Players elsewhere play online free and see a Buy Me a
+ * Coffee tip button instead. Region comes from the browser's timezone, so it
+ * isn't tamper-proof; it's a soft gate, not DRM.
+ */
 function requireCoffee(session) {
+  if (session.region !== 'UG') return true;
   if (payments.hasPass(session.guestId)) return true;
-  send(session, { type: 'error', code: 'NEED_COFFEE', message: 'Online play needs a coffee.' });
+  send(session, { type: 'error', code: 'NEED_COFFEE', message: 'Online play needs a Rolex.' });
   return false;
+}
+
+function cleanRegion(r) {
+  return r === 'INTL' ? 'INTL' : 'UG'; // default to UG so the gate fails closed
 }
 
 // ---------- helpers ----------
@@ -142,8 +152,34 @@ function seatOf(room, session) {
 
 function other(p) { return p === 1 ? 2 : 1; }
 
+// ---------- live lobby stats ----------
+// Who's around: everyone connected, how many are mid-game, and how many are
+// waiting in "Play Online" right now. Pushed to players on the menu/lobby
+// whenever it changes (at most every 1.5 s), plus a 15 s heartbeat.
+function statsMsg() {
+  return {
+    type: 'stats',
+    online: onlineCount(),
+    playing: playingCount(),
+    waiting: queue.filter((s) => s.ws).length,
+  };
+}
+
+function broadcastStats() {
+  const msg = statsMsg();
+  for (const s of sessions.values()) if (s.ws && !isActive(s.room)) send(s, msg);
+}
+
+let statsTimer = null;
+function scheduleStats() {
+  if (statsTimer) return;
+  statsTimer = setTimeout(() => { statsTimer = null; broadcastStats(); }, 1500);
+}
+
 function removeFromQueue(session) {
+  const before = queue.length;
   queue = queue.filter((s) => s !== session);
+  if (queue.length !== before) scheduleStats();
 }
 
 function closeHosting(session) {
@@ -199,6 +235,7 @@ function createMatch(a, b, isPrivate) {
   };
   rooms.set(room.id, room);
   a.room = room; b.room = room;
+  scheduleStats();
   startGame(room, 1);
   log('match', room.id, isPrivate ? 'private' : 'public', a.name, 'vs', b.name);
 }
@@ -283,6 +320,7 @@ function endGame(room, winner, reason) {
   send(room.players[0], msg);
   send(room.players[1], msg);
   log('gameOver', room.id, 'winner', winner, reason, room.scores.join('-'));
+  scheduleStats();
   // keep the room around for a rematch, then clean up
   clearTimeout(room.cleanupTimer);
   room.cleanupTimer = setTimeout(() => destroyRoom(room), FINISHED_ROOM_TTL_MS);
@@ -318,6 +356,11 @@ function handle(ws, session, msg) {
       return;
     }
 
+    case 'setRegion': {
+      session.region = cleanRegion(msg.region);
+      return;
+    }
+
     case 'queue': {
       if (isActive(session.room)) return send(session, { type: 'error', code: 'IN_GAME', message: 'Already in a game.' });
       if (!requireCoffee(session)) return;
@@ -329,6 +372,7 @@ function handle(ws, session, msg) {
         createMatch(opp, session, false);
       } else {
         queue.push(session);
+        scheduleStats();
         send(session, { type: 'queued' });
       }
       return;
@@ -458,16 +502,19 @@ function attach(ws, hello) {
     }
     session.ws = ws;
     session.name = cleanName(hello.name ?? session.name);
+    session.region = cleanRegion(hello.region);
   } else {
-    session = { guestId, name: cleanName(hello.name), ws, room: null, hosting: null, goneTimer: null };
+    session = { guestId, name: cleanName(hello.name), region: cleanRegion(hello.region), ws, room: null, hosting: null, goneTimer: null };
     sessions.set(guestId, session);
   }
 
   const room = session.room;
+  scheduleStats();
   send(session, {
     type: 'welcome',
     online: onlineCount(),
     playing: playingCount(),
+    waiting: queue.filter((s) => s.ws).length,
     inGame: !!(room && isActive(room)),
     coffee: payments.config(session.guestId),
   });
@@ -489,6 +536,7 @@ function attach(ws, hello) {
 function detach(ws, session) {
   if (!session || session.ws !== ws) return;
   session.ws = null;
+  scheduleStats();
   removeFromQueue(session);
 
   const room = session.room;
@@ -686,10 +734,7 @@ setInterval(() => {
 }, HEARTBEAT_MS).unref();
 
 // lobby stats for players sitting on the menu / in the queue
-setInterval(() => {
-  const msg = { type: 'stats', online: onlineCount(), playing: playingCount() };
-  for (const s of sessions.values()) if (s.ws && !isActive(s.room)) send(s, msg);
-}, 15_000).unref();
+setInterval(broadcastStats, 15_000).unref();
 
 // Keep idle HTTP connections open longer than the reverse proxy does, so
 // Traefik never reuses a socket Node has just closed (avoids random 502s).
@@ -701,7 +746,7 @@ process.on('unhandledRejection', (err) => { log('unhandledRejection', err); });
 
 server.listen(PORT, () => {
   log(`DULU server on :${PORT} — static from ${STATIC_DIR}`);
-  log(`payments: ${payments.enabled ? `ON — ${payments.priceUgx} UGX per coffee = ${payments.passHours}h online` : 'OFF (Relworx env vars not set) — online play is free'}; data in ${DATA_DIR}`);
+  log(`payments: ${payments.enabled ? `ON — ${payments.priceUgx} UGX per Rolex = ${payments.passHours}h online (players in Uganda)` : 'OFF (Relworx env vars not set) — online play is free'}; data in ${DATA_DIR}`);
   log(`limits: ${MAX_CONNECTIONS} connections, ${MAX_CONNECTIONS_PER_IP}/IP; origins: ${ALLOWED_ORIGINS.join(", ") || "any"}`);
 });
 

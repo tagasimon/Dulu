@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#8b4a2a" />
     <title>DULU — The Blasting Game</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cookie&display=swap" rel="stylesheet" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cellipse cx='32' cy='34' rx='22' ry='16' fill='%235a3320'/%3E%3Cellipse cx='26' cy='28' rx='5' ry='3' fill='%23a06a4a'/%3E%3C/svg%3E" />
   </head>
   <body>
@@ -27,7 +30,7 @@
         <div id="hint-text">PULL BACK • RELEASE</div>
         <div id="blast-flash"></div>
         <button id="sound-toggle" title="Toggle sound">🔊</button>
-        <button id="btn-leave" title="Back to menu">✕</button>
+        <button id="btn-leave" title="Back to home" aria-label="Back to home">⌂ HOME</button>
         <div id="net-banner" class="hidden"></div>
       </div>
 
@@ -39,6 +42,7 @@
           <span>YOUR NAME</span>
           <input id="name-input" type="text" maxlength="16" autocomplete="nickname" enterkeyhint="done" spellcheck="false" />
         </label>
+        <div id="online-pill" class="online-pill hidden" aria-live="polite"><i class="dot"></i><span id="online-pill-text"></span></div>
         <div class="menu-buttons">
           <button id="btn-online" class="btn-primary">PLAY ONLINE</button>
           <button id="btn-friend" class="btn-secondary">PLAY A FRIEND</button>
@@ -48,8 +52,9 @@
         <div id="coffee-status" class="coffee-status hidden">
           <span id="coffee-status-text"></span>
           <button id="coffee-status-cta" class="link-btn" type="button"></button>
+          <button id="coffee-status-ug" class="link-btn hidden" type="button">In Uganda? Use Mobile Money</button>
         </div>
-        <div class="footer-note"><span id="online-count"></span>First to 25 wins</div>
+        <div class="footer-note"><span id="online-count" hidden></span>First to 25 wins</div>
       </div>
 
       <div id="lobby" class="hidden">
@@ -57,6 +62,7 @@
           <h2 id="lobby-title">FINDING AN OPPONENT</h2>
           <div id="lobby-spinner" class="seed-spinner"><i></i><i></i></div>
           <p id="lobby-text"></p>
+          <p id="lobby-live" class="lobby-live"></p>
 
           <div id="lobby-friend" class="hidden">
             <button id="btn-create-room" class="btn-primary">CREATE A ROOM</button>
@@ -86,15 +92,15 @@
         <div class="coffee-card">
 
           <div id="coffee-buy">
-            <h2 id="coffee-title">BUY ME A COFFEE</h2>
-            <p class="coffee-why">DULU is free on one device. Online games run on a small server that costs real money every month — a coffee helps keep the lights on.</p>
+            <h2 id="coffee-title">BUY ME A ROLEX 🌯</h2>
+            <p id="coffee-why" class="coffee-why"></p>
             <div class="coffee-picker">
-              <button type="button" id="coffee-minus" class="step-btn" aria-label="One less coffee">−</button>
+              <button type="button" id="coffee-minus" class="step-btn" aria-label="One less Rolex">−</button>
               <div class="coffee-amount">
-                <div id="coffee-cups" class="coffee-cups">☕</div>
-                <div><b id="coffee-count">1 coffee</b> · <span id="coffee-duration">1 day online</span></div>
+                <div id="coffee-cups" class="coffee-cups">🌯</div>
+                <div><b id="coffee-count">1 Rolex</b> · <span id="coffee-duration">1 day online</span></div>
               </div>
-              <button type="button" id="coffee-plus" class="step-btn" aria-label="One more coffee">+</button>
+              <button type="button" id="coffee-plus" class="step-btn" aria-label="One more Rolex">+</button>
             </div>
             <div id="coffee-price-note" class="coffee-small"></div>
             <div id="coffee-current" class="coffee-small coffee-current"></div>
@@ -102,10 +108,11 @@
               <label for="coffee-phone">MTN or Airtel Mobile Money number</label>
               <input id="coffee-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="0772 123456" maxlength="16" />
               <div id="coffee-error" class="lobby-error-inline"></div>
-              <button id="coffee-buy-btn" type="submit" class="btn-primary">BUY 1 COFFEE · 2,000 UGX</button>
+              <button id="coffee-buy-btn" type="submit" class="btn-primary">BUY 1 ROLEX · 2,000 UGX</button>
             </form>
             <div class="coffee-small">You'll get a prompt on your phone to approve with your PIN. We never ask for your PIN here.</div>
             <button id="coffee-restore-link" type="button" class="link-btn">Already bought one? Restore it</button>
+            <div id="coffee-card-row" class="coffee-small">Paying by card? <button id="coffee-card-link" type="button" class="link-btn">Use Buy Me a Coffee</button></div>
           </div>
 
           <div id="coffee-waiting" class="hidden">
@@ -115,7 +122,7 @@
           </div>
 
           <div id="coffee-success" class="hidden">
-            <h2 id="coffee-success-title">THANK YOU! ☕</h2>
+            <h2 id="coffee-success-title">THANK YOU! 🌯</h2>
             <p id="coffee-success-text" class="coffee-why"></p>
             <button id="coffee-continue" type="button" class="btn-primary">PLAY NOW</button>
           </div>
@@ -133,7 +140,7 @@
           </div>
 
           <div id="coffee-restore" class="hidden">
-            <h2>RESTORE YOUR COFFEE</h2>
+            <h2>RESTORE YOUR ROLEX</h2>
             <p class="coffee-why">On a new phone or browser? Enter the number you paid with to bring your online time across.</p>
             <form id="coffee-restore-form" class="coffee-form">
               <input id="coffee-restore-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="0772 123456" maxlength="16" />
@@ -158,7 +165,7 @@
             <li><b>Keep blasting</b> — on a hit you shoot again.</li>
             <li><b>Miss</b> — turn passes to the other player.</li>
             <li><b>First to 25</b> hits wins.</li>
-            <li><b>Online</b> — no sign-up. Tap <i>Play Online</i> to meet a random player, or <i>Play a Friend</i> to send a room link. Online play runs on coffee (1 = 24 hours); your friend joins free.</li>
+            <li><b>Online</b> — no sign-up. Tap <i>Play Online</i> to meet a random player, or <i>Play a Friend</i> to send a room link. In Uganda, online play runs on Rolex 🌯 (2,000 UGX = 24 hours, via Mobile Money); your friend joins free.</li>
           </ol>
           <button id="btn-close-tut" class="btn-primary">GOT IT</button>
         </div>
@@ -171,7 +178,8 @@
           <div id="go-note" class="go-note"></div>
           <button id="btn-restart" class="btn-primary">PLAY AGAIN</button>
           <button id="btn-new-opponent" class="btn-secondary hidden">NEW OPPONENT</button>
-          <button id="btn-go-menu" class="btn-text">MENU</button>
+          <button id="btn-go-menu" class="btn-text">⌂ HOME</button>
+          <div class="go-support">Enjoying DULU? <button id="go-support-btn" type="button" class="link-btn">Buy me a Rolex 🌯</button></div>
         </div>
       </div>
 

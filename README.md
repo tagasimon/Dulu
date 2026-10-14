@@ -37,7 +37,8 @@ Works with mouse, trackpad and touch. Rotate your phone if the arena feels cramp
 - **One server, one arena.** The server picks a random arena seed and sends the full layout (seed positions, every obstacle) to both players, so both see exactly the same field.
 - **The shooter's screen decides the shot.** When you shoot, the opponent instantly sees your launch and watches it play out. When everything stops, your screen reports where the seeds ended up and how many hits you scored; the server checks it (your turn, sane positions, launch speed within limits), updates the score and decides whose turn is next. The opponent's seeds glide to the exact final positions, so both screens always agree.
 - **Fair play:** 40 s to take each shot (countdown appears in the last 15 s). Miss 3 turns in a row and you forfeit. If someone disconnects, the other player sees a countdown; after 45 s without reconnecting, they forfeit. Leaving a match (✕, then tap again to confirm) counts as a forfeit.
-- After a game: **Rematch** (loser shoots first), **New Opponent**, or **Menu**.
+- After a game: **Rematch** (loser shoots first), **New Opponent**, or **Home**.
+- **Home** is always one tap away: the ⌂ HOME button in a game (online it asks "tap again", since leaving forfeits), ⌂ HOME on the lobby and game-over screens, and the phone's **back button** (same rules).
 
 Server files: `server/index.js` (matchmaking, rooms, turns, static file serving) and `shared/arena.js` (arena generator used by both the server and the game).
 
@@ -99,9 +100,21 @@ docker run --rm -p 8080:80 dulu
 # open http://localhost:8080 in two browsers
 ```
 
-## Buy me a coffee (Relworx mobile money)
+## Buy me a Rolex 🌯 (Relworx mobile money + Buy Me a Coffee)
 
-Same Device is always free. **Online play** (Play Online, and *creating* a friend room) needs a coffee: **1 coffee = 2,000 UGX = 24 hours**, and buying more stacks extra days. A friend who opens your room link plays free. The menu shows one quiet line ("Online play runs on coffee ☕"), and the coffee sheet explains it keeps the server's lights on.
+A *Rolex* is Uganda's chapati-and-egg street food (about 2,000 UGX), so "buy me a Rolex" is the local "buy me a coffee".
+
+**Players in Uganda** (browser timezone `Africa/Kampala`):
+- Same Device is always free.
+- Play Online and *creating* a friend room need a Rolex: **1 Rolex = 2,000 UGX = 24 hours**, and more Rolexes stack extra days. They pay with MTN/Airtel Mobile Money via Relworx.
+- A friend who opens your room link plays free.
+- Free players see a quiet "Buy me a Rolex 🌯" on the menu and the game-over card. It never interrupts a game.
+
+**Players outside Uganda** play online free and see a yellow **Buy me a Rolex** button that opens [Buy Me a Coffee](https://www.buymeacoffee.com/elastictechnologies) (card payments, a tip only). If they are actually in Uganda, an "In Uganda? Use Mobile Money" link switches them over. There's deliberately no switch the other way on the paywall, so it can't be used to skip paying.
+
+The region comes from the browser's timezone, so it's a soft gate: someone determined could change their phone's timezone to play online free.
+
+Players and the server see who's around: the menu shows a live pill ("3 other players online · 1 in games", or "1 player waiting for a match — tap Play Online" when someone's in the queue), updated within ~1.5 s.
 
 How a purchase works:
 1. The player picks how many coffees and enters their MTN/Airtel number (never a PIN).
@@ -120,14 +133,14 @@ Passes are tied to the player's anonymous browser ID. On a new phone or browser,
 | `RELWORX_ACCOUNT_NO` | *(from Relworx)* | Shared with Jukila. |
 | `RELWORX_WEBHOOK_SECRET` | *(from Relworx)* | Shared with Jukila. Used to verify `x-relworx-signature`. |
 | `APP_REF_PREFIX` | `DULU-` | **Must differ from Jukila's `JK-`/`JKP-`**; the server refuses to start with those. |
-| `COFFEE_PRICE_UGX` | `2000` | Optional. |
-| `PASS_HOURS` | `24` | Optional. Hours of online play per coffee. |
+| `ROLEX_PRICE_UGX` | `2000` | Optional. (`COFFEE_PRICE_UGX` also works.) |
+| `PASS_HOURS` | `24` | Optional. Hours of online play per Rolex. |
 
 ### One-time setup
 1. **Persistent storage:** Coolify → DULU app → *Persistent Storage* → add a volume with destination path **`/data`**. Payments and passes live in `/data/dulu.db` (SQLite). Without the volume, every redeploy forgets who has paid.
-2. **Env vars:** add the variables above, then redeploy. The deploy log should show `payments: ON — 2000 UGX per coffee = 24h online`.
+2. **Env vars:** add the variables above, then redeploy. The deploy log should show `payments: ON — 2000 UGX per Rolex = 24h online (players in Uganda)`.
 3. **Relworx dashboard: change nothing.** The account is shared with Jukila and has only one *Request payment webhook* slot, which must stay `https://api.jukila.elastictech.biz/billing/webhook`. DULU doesn't need it because it confirms payments itself (step 3 above). DULU's own `/relworx/webhook` endpoint stays available in case Jukila ever forwards `DULU-` references to it.
-4. **Test with a real coffee:** Play Online → buy 1 coffee with your own number → approve → you should see "Thank you! ☕" and start matchmaking. The deploy log shows `payment DULU-… SUCCESS +1 coffee(s)`.
+4. **Test with a real coffee:** Play Online → buy 1 Rolex with your own number → approve → you should see "Thank you! 🌯" and start matchmaking. The deploy log shows `payment DULU-… SUCCESS +1 Rolex(es)`.
 
 ### Endpoints
 - `POST /relworx/collect` with `{ phone, coffees | amountUgx, guestId }`: starts a collection. Rate-limited per IP and per phone number so nobody can spam prompts to a stranger's phone.
@@ -159,7 +172,8 @@ src/
   effects/Dust.ts         warm dust burst + rolling trail particles
   audio/AudioManager.ts   WebAudio-synthesized launch/thwack/roll SFX
   ui/UI.ts                HUD/menu/lobby/tutorial/game-over DOM controllers
-  ui/Coffee.ts            buy-me-a-coffee sheet (stepper, phone, polling, restore)
+  ui/Coffee.ts            buy-me-a-Rolex sheet (stepper, phone, polling, restore) + Buy Me a Coffee link
+  net/region.ts           Uganda vs. elsewhere (timezone), decides Mobile Money vs. card
   net/Net.ts              WebSocket client with auto-reconnect
   net/identity.ts         anonymous guest ID + nickname (localStorage)
 ```
